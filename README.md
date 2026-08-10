@@ -25,9 +25,22 @@ npm run dev
 
 The interface runs in preview mode without credentials. Live matching, persistent messages, private Realtime channels, and admin data require Supabase configuration.
 
-## Production setup
+## Vercel deployment
+
+The default scripts use native Next.js 15, so Vercel can detect and deploy the App Router directly. Import the repository with:
+
+- Framework Preset: **Next.js**
+- Root Directory: repository root
+- Build Command: `npm run build` (or leave the detected default)
+- Output Directory: leave blank; do not set `dist` or `.next`
+
+Add the variables from [`.env.example`](.env.example), then redeploy. If the Vercel project previously had an overridden build or output directory, remove those overrides before redeploying.
+
+## Production data setup
 
 Run [`supabase/schema.sql`](supabase/schema.sql) in a new Supabase project, configure the values from [`.env.example`](.env.example), and follow [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). The system design and security boundaries are documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+The optional `npm run build:sites` command preserves the existing Cloudflare/Sites package path; it is not the Vercel build command.
 
 ## Privacy guarantees
 

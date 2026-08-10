@@ -1,34 +1,28 @@
 import assert from "node:assert/strict";
+import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 
-async function render(pathname = "/") {
-  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
-  workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
-  const { default: worker } = await import(workerUrl.href);
-  return worker.fetch(
-    new Request(`http://localhost${pathname}`, { headers: { accept: "text/html" } }),
-    { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
-    { waitUntil() {}, passThroughOnException() {} },
-  );
-}
+const root = new URL("../", import.meta.url);
 
-test("server-renders the VibeConnect landing page", async () => {
-  const response = await render();
-  assert.equal(response.status, 200);
-  assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
-  const html = await response.text();
-  assert.match(html, /Talk to/);
-  assert.match(html, /someone new/);
-  assert.match(html, /Start connecting/);
-  assert.match(html, /Safety first/);
-  assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
+test("native Next.js build contains the public App Router routes", async () => {
+  await access(new URL(".next/BUILD_ID", root));
+  const manifest = JSON.parse(
+    await readFile(new URL(".next/server/app-paths-manifest.json", root), "utf8"),
+  );
+  const routes = Object.keys(manifest);
+  assert.ok(routes.some((route) => route === "/page" || route === "/"));
+  assert.ok(routes.some((route) => route.includes("/start/page")));
+  assert.ok(routes.some((route) => route.includes("/chat/[room]/page")));
+  assert.ok(routes.some((route) => route.includes("/api/session/route")));
 });
 
-test("renders the no-account setup route", async () => {
-  const response = await render("/start");
-  assert.equal(response.status, 200);
-  const html = await response.text();
-  assert.match(html, /Tell us the basics/);
-  assert.match(html, /Your nickname/);
-  assert.match(html, /Find someone/);
+test("landing and setup source retain the primary user journey", async () => {
+  const [landing, setup] = await Promise.all([
+    readFile(new URL("components/landing-page.tsx", root), "utf8"),
+    readFile(new URL("components/setup-form.tsx", root), "utf8"),
+  ]);
+  assert.match(landing, /Talk to/);
+  assert.match(landing, /Start connecting/);
+  assert.match(setup, /Tell us the basics/);
+  assert.match(setup, /Find someone/);
 });

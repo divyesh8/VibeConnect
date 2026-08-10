@@ -21,7 +21,15 @@ const eslintConfig = defineConfig([
   react.configs.flat["jsx-runtime"],
   reactHooks.configs.flat["recommended-latest"],
   jsxA11y.flatConfigs.recommended,
-  next.configs["core-web-vitals"],
+  {
+    plugins: {
+      "@next/next": next,
+    },
+    rules: {
+      ...next.configs.recommended.rules,
+      ...next.configs["core-web-vitals"].rules,
+    },
+  },
   {
     languageOptions: {
       globals: {
