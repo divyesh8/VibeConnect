@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 type Bucket = { count: number; resetAt: number };
 const buckets = new Map<string, Bucket>();
@@ -25,6 +26,22 @@ export async function sha256(value: string) {
   const bytes = new TextEncoder().encode(value);
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export async function allowDistributedRequest(
+  supabase: SupabaseClient | null,
+  key: string,
+  limit: number,
+  windowSeconds: number,
+) {
+  if (!supabase) return allowRequest(key, limit, windowSeconds * 1000).allowed;
+  const { data, error } = await supabase.rpc("consume_rate_limit", {
+    p_key: await sha256(key),
+    p_limit: limit,
+    p_window_seconds: windowSeconds,
+  });
+  if (error) return allowRequest(key, limit, windowSeconds * 1000).allowed;
+  return Boolean(data);
 }
 
 export function secureEquals(a: string, b: string) {

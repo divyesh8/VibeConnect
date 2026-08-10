@@ -44,7 +44,8 @@ export function useRoomChat(roomId: string, profile: AnonymousProfile | null) {
       },
     ]);
 
-    const channel = subscribeToRoom(roomId, {
+    let active = true;
+    void subscribeToRoom(roomId, {
       onMessage: (incoming) => {
         if (incoming.senderId === profile.id) return;
         setMessages((current) => current.some((item) => item.id === incoming.id) ? current : [...current, incoming]);
@@ -52,9 +53,17 @@ export function useRoomChat(roomId: string, profile: AnonymousProfile | null) {
       onTyping: ({ senderId, typing }) => {
         if (senderId !== profile.id) setPartnerTyping(typing);
       },
+    }).then((channel) => {
+      if (!active) leaveRoomChannel(channel);
+      else channelRef.current = channel;
+    }).catch(() => {
+      channelRef.current = null;
     });
-    channelRef.current = channel;
-    return () => leaveRoomChannel(channel);
+    return () => {
+      active = false;
+      leaveRoomChannel(channelRef.current);
+      channelRef.current = null;
+    };
   }, [profile, roomId]);
 
   const sendMessage = useCallback(async (content: string) => {

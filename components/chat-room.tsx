@@ -53,8 +53,8 @@ function StreamVideo({ stream, muted, className }: { stream: MediaStream | null;
   return <video ref={ref} autoPlay playsInline muted={muted} className={className} />;
 }
 
-function MediaStage({ profile, mode }: { profile: AnonymousProfile; mode: CommunicationMode }) {
-  const media = useWebRTC(mode);
+function MediaStage({ profile, mode, roomId }: { profile: AnonymousProfile; mode: CommunicationMode; roomId: string }) {
+  const media = useWebRTC(mode, roomId, profile.id);
   const connected = Boolean(media.localStream);
 
   return (
@@ -62,8 +62,7 @@ function MediaStage({ profile, mode }: { profile: AnonymousProfile; mode: Commun
       {mode === "video" ? (
         <div className="relative grid min-h-[430px] flex-1 gap-2 p-2 md:grid-cols-2">
           <div className="relative overflow-hidden rounded-[19px] border border-white/[0.08] bg-gradient-to-br from-[#203d40] to-[#101416]">
-            <div className="absolute left-1/2 top-1/2 size-72 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#78f7df]/10 blur-[80px]" />
-            <div className="absolute left-1/2 top-1/2 grid size-28 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-[38px] bg-gradient-to-br from-[#78f7df] to-[#587dff] font-display text-3xl font-black text-[#071313] shadow-2xl">N</div>
+            {media.remoteStream ? <StreamVideo stream={media.remoteStream} className="absolute inset-0 size-full object-cover" /> : <><div className="absolute left-1/2 top-1/2 size-72 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#78f7df]/10 blur-[80px]" /><div className="absolute left-1/2 top-1/2 grid size-28 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-[38px] bg-gradient-to-br from-[#78f7df] to-[#587dff] font-display text-3xl font-black text-[#071313] shadow-2xl">N</div></>}
             <div className="absolute bottom-4 left-4 flex items-center gap-2 rounded-full bg-black/35 px-3 py-1.5 text-xs font-bold backdrop-blur-md"><span className="status-dot !size-1.5" /> Nova</div>
             <div className="absolute right-4 top-4 flex h-8 items-end gap-1 rounded-full bg-black/30 px-3 py-2 backdrop-blur-md">
               {[1, 2, 3, 4].map((bar) => <span key={bar} className="signal-bar !w-[3px]" />)}
@@ -257,7 +256,7 @@ export function ChatRoom({ roomId }: { roomId: string }) {
               </form>
             </div>
           ) : (
-            <MediaStage profile={profile} mode={profile.mode} />
+            <MediaStage profile={profile} mode={profile.mode} roomId={roomId} />
           )}
         </GlassCard>
 

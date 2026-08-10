@@ -28,11 +28,13 @@ export const metadata: Metadata = {
     title: "VibeConnect — Talk to someone new",
     description: "Meet strangers. Share stories. Make connections.",
     type: "website",
+    images: [{ url: "/og.png", width: 1792, height: 1024, alt: "VibeConnect — Talk to someone new" }],
   },
   twitter: {
     card: "summary_large_image",
     title: "VibeConnect — Talk to someone new",
     description: "Meet strangers. Share stories. Make connections.",
+    images: ["/og.png"],
   },
 };
 

@@ -7,7 +7,7 @@ export type SignalPayload =
   | { kind: "answer"; sdp: RTCSessionDescriptionInit; senderId: string }
   | { kind: "ice"; candidate: RTCIceCandidateInit; senderId: string };
 
-export function subscribeToRoom(
+export async function subscribeToRoom(
   roomId: string,
   handlers: {
     onMessage?: (message: ChatMessage) => void;
@@ -18,8 +18,13 @@ export function subscribeToRoom(
   const supabase = getBrowserSupabase();
   if (!supabase) return null;
 
+  const tokenResponse = await fetch(`/api/realtime-token?roomId=${encodeURIComponent(roomId)}`);
+  if (!tokenResponse.ok) return null;
+  const { token } = await tokenResponse.json() as { token: string };
+  supabase.realtime.setAuth(token);
+
   const channel = supabase
-    .channel(`room:${roomId}`, { config: { broadcast: { self: false } } })
+    .channel(`room:${roomId}`, { config: { private: true, broadcast: { self: false } } })
     .on(
       "postgres_changes",
       { event: "INSERT", schema: "public", table: "messages", filter: `room_id=eq.${roomId}` },
@@ -37,8 +42,21 @@ export function subscribeToRoom(
       },
     )
     .on("broadcast", { event: "typing" }, ({ payload }) => handlers.onTyping?.(payload as { senderId: string; typing: boolean }))
-    .on("broadcast", { event: "webrtc" }, ({ payload }) => handlers.onSignal?.(payload as SignalPayload))
-    .subscribe();
+    .on("broadcast", { event: "webrtc" }, ({ payload }) => handlers.onSignal?.(payload as SignalPayload));
+
+  await new Promise<void>((resolve, reject) => {
+    const timeout = window.setTimeout(() => reject(new Error("Realtime connection timed out")), 8000);
+    channel.subscribe((status) => {
+      if (status === "SUBSCRIBED") {
+        window.clearTimeout(timeout);
+        resolve();
+      }
+      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        window.clearTimeout(timeout);
+        reject(new Error(`Realtime channel ${status.toLowerCase()}`));
+      }
+    });
+  });
 
   return channel;
 }

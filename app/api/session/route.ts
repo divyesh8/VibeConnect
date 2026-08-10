@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requestIp, allowRequest, sha256 } from "@/lib/server/security";
+import { requestIp, allowDistributedRequest, sha256 } from "@/lib/server/security";
 import { PREVIEW_USER_COOKIE, SESSION_COOKIE } from "@/lib/server/session";
 import { sessionSchema } from "@/lib/validation";
 import { createServerSupabase } from "@/services/supabase";
 
 export async function POST(request: NextRequest) {
   const ip = requestIp(request);
-  if (!allowRequest(`session:${ip}`, 8, 60_000).allowed) {
+  const supabase = createServerSupabase();
+  if (!await allowDistributedRequest(supabase, `session:${ip}`, 8, 60)) {
     return NextResponse.json({ error: "Too many sessions created. Try again shortly." }, { status: 429 });
   }
 
@@ -18,8 +19,6 @@ export async function POST(request: NextRequest) {
   const sessionToken = `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll("-", "");
   const tokenHash = await sha256(sessionToken);
   const createdAt = new Date().toISOString();
-  const supabase = createServerSupabase();
-
   if (supabase) {
     const { error } = await supabase.from("users_online").insert({
       id: userId,

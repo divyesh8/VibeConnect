@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { allowRequest } from "@/lib/server/security";
+import { allowDistributedRequest } from "@/lib/server/security";
 import { getSessionUser } from "@/lib/server/session";
 import { cleanText, messageSchema } from "@/lib/validation";
 import { moderateText } from "@/services/moderation";
@@ -8,14 +8,13 @@ import { createServerSupabase } from "@/services/supabase";
 export async function POST(request: NextRequest) {
   const user = await getSessionUser(request);
   if (!user) return NextResponse.json({ error: "Session expired." }, { status: 401 });
-  if (!allowRequest(`message:${user.id}`, 18, 10_000).allowed) return NextResponse.json({ error: "You are sending messages too quickly." }, { status: 429 });
+  const supabase = createServerSupabase();
+  if (!await allowDistributedRequest(supabase, `message:${user.id}`, 18, 10)) return NextResponse.json({ error: "You are sending messages too quickly." }, { status: 429 });
 
   const parsed = messageSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "Invalid message." }, { status: 400 });
   const content = cleanText(parsed.data.content);
   const moderation = await moderateText(content);
-  const supabase = createServerSupabase();
-
   if (moderation.flagged) {
     if (supabase) {
       await supabase.from("moderation_events").insert({ user_id: user.id, room_id: parsed.data.roomId, source: moderation.source, categories: moderation.categories, scores: moderation.scores ?? {} });
