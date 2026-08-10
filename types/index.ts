@@ -1,6 +1,6 @@
 export type Gender = "male" | "female" | "other" | "prefer_not_to_say";
 export type CommunicationMode = "text" | "voice" | "video";
-export type OnlineStatus = "searching" | "connected" | "offline";
+export type OnlineStatus = "searching" | "confirming" | "connected" | "offline";
 
 export interface AnonymousProfile {
   id: string;
@@ -24,9 +24,33 @@ export interface ChatMessage {
 }
 
 export interface MatchResult {
-  matched: boolean;
-  roomId?: string;
-  partner?: {
+  proposal: null | {
+    id: string;
+    expiresAt: string;
+    partner: {
+      id: string;
+      username: string;
+      interests: string[];
+    };
+  };
+}
+
+export interface MatchProposalStatus {
+  status: "pending" | "matched" | "declined" | "expired" | "cancelled" | "invalid";
+  roomId: string | null;
+  partnerAccepted: boolean;
+  partner: {
+    id: string;
+    username: string;
+    interests: string[];
+  };
+}
+
+export interface LiveRoomContext {
+  initiator: boolean;
+  mode: CommunicationMode;
+  status: "active" | "ended";
+  partner: {
     id: string;
     username: string;
     interests: string[];

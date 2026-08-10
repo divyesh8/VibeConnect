@@ -10,6 +10,7 @@ const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
 export class PeerManager {
   readonly connection: RTCPeerConnection;
   private pendingCandidates: RTCIceCandidateInit[] = [];
+  private makingOffer = false;
 
   constructor(
     private readonly emitSignal: (signal: PeerSignal) => void,
@@ -33,9 +34,15 @@ export class PeerManager {
   }
 
   async createOffer() {
-    const offer = await this.connection.createOffer();
-    await this.connection.setLocalDescription(offer);
-    this.emitSignal({ kind: "offer", sdp: offer });
+    if (this.makingOffer || this.connection.signalingState !== "stable") return;
+    this.makingOffer = true;
+    try {
+      const offer = await this.connection.createOffer();
+      await this.connection.setLocalDescription(offer);
+      this.emitSignal({ kind: "offer", sdp: offer });
+    } finally {
+      this.makingOffer = false;
+    }
   }
 
   async acceptOffer(sdp: RTCSessionDescriptionInit) {

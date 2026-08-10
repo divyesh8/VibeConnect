@@ -1,23 +1,36 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSessionUser } from "@/lib/server/session";
 import { allowDistributedRequest } from "@/lib/server/security";
+import { getSessionUser } from "@/lib/server/session";
 import { createServerSupabase } from "@/services/supabase";
 
 export async function POST(request: NextRequest) {
+  const supabase = createServerSupabase();
+  if (!supabase) return NextResponse.json({ error: "Live matching is not configured." }, { status: 503 });
   const user = await getSessionUser(request);
   if (!user) return NextResponse.json({ error: "Session expired." }, { status: 401 });
-  const supabase = createServerSupabase();
-  if (!await allowDistributedRequest(supabase, `match:${user.id}`, 12, 60)) return NextResponse.json({ error: "Please wait before matching again." }, { status: 429 });
-  if (!supabase) return NextResponse.json({ matched: false });
+  if (!await allowDistributedRequest(supabase, `match:${user.id}`, 40, 60)) {
+    return NextResponse.json({ error: "Please wait before checking the queue again." }, { status: 429 });
+  }
 
-  const { data, error } = await supabase.rpc("match_anonymous_user", { p_user_id: user.id });
+  const now = new Date().toISOString();
+  const heartbeatUpdate: { last_seen: string; status?: string } = { last_seen: now };
+  if (user.status === "offline") heartbeatUpdate.status = "searching";
+  await supabase.from("online_users").update(heartbeatUpdate).eq("id", user.id);
+
+  const { data, error } = await supabase.rpc("propose_real_match", { p_user_id: user.id });
   if (error) return NextResponse.json({ error: "Matching is temporarily unavailable." }, { status: 503 });
-  const match = Array.isArray(data) ? data[0] : data;
-  if (!match?.room_id) return NextResponse.json({ matched: false });
+  const proposal = Array.isArray(data) ? data[0] : data;
+  if (!proposal?.proposal_id) return NextResponse.json({ proposal: null });
 
   return NextResponse.json({
-    matched: true,
-    roomId: match.room_id,
-    partner: { id: match.partner_id, username: match.partner_username, interests: match.partner_interests ?? [] },
+    proposal: {
+      id: proposal.proposal_id,
+      expiresAt: proposal.expires_at,
+      partner: {
+        id: proposal.partner_id,
+        username: proposal.partner_username,
+        interests: proposal.partner_interests ?? [],
+      },
+    },
   });
 }

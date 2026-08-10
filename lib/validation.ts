@@ -15,12 +15,14 @@ export const messageSchema = z.object({
 
 export const reportSchema = z.object({
   roomId: z.string().uuid(),
-  reportedUserId: z.string().min(1).max(80),
+  reportedUserId: z.string().uuid(),
   reason: z.enum(["harassment", "hate_speech", "sexual_content", "spam", "threats"]),
 });
 
-export const blockSchema = z.object({ blockedUserId: z.string().min(1).max(80) });
+export const blockSchema = z.object({ blockedUserId: z.string().uuid() });
 export const endRoomSchema = z.object({ roomId: z.string().uuid() });
+export const proposalSchema = z.object({ proposalId: z.string().uuid() });
+export const heartbeatSchema = z.object({ state: z.enum(["searching", "connected"]).optional() });
 
 export function cleanText(value: string) {
   return Array.from(value.normalize("NFKC"))

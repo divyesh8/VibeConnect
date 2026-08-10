@@ -11,9 +11,13 @@ export async function POST(request: NextRequest) {
   if (!await allowDistributedRequest(supabase, `report:${user.id}`, 5, 60 * 60)) return NextResponse.json({ error: "Report limit reached." }, { status: 429 });
   const parsed = reportSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "Invalid report." }, { status: 400 });
-  if (supabase) {
-    const { error } = await supabase.from("reports").insert({ reporter_id: user.id, reported_id: parsed.data.reportedUserId, room_id: parsed.data.roomId, reason: parsed.data.reason });
-    if (error) return NextResponse.json({ error: "Report could not be saved." }, { status: 503 });
+  if (!supabase) return NextResponse.json({ error: "Live safety controls are unavailable." }, { status: 503 });
+  const { data: room } = await supabase.from("chat_rooms").select("user1_id, user2_id").eq("id", parsed.data.roomId).maybeSingle();
+  const roomUsers = room ? [room.user1_id, room.user2_id] : [];
+  if (!room || !roomUsers.includes(user.id) || !roomUsers.includes(parsed.data.reportedUserId) || parsed.data.reportedUserId === user.id) {
+    return NextResponse.json({ error: "Invalid room report." }, { status: 403 });
   }
+  const { error } = await supabase.from("reports").insert({ reporter_id: user.id, reported_id: parsed.data.reportedUserId, room_id: parsed.data.roomId, reason: parsed.data.reason });
+  if (error) return NextResponse.json({ error: "Report could not be saved." }, { status: 503 });
   return NextResponse.json({ accepted: true }, { status: 201 });
 }

@@ -64,7 +64,7 @@ export function LandingPage() {
         >
           <div className="eyebrow mb-6">
             <span className="status-dot" />
-            2,841 people vibing right now
+            Real people. Live connections. No bots.
           </div>
           <h1 className="text-balance font-display text-[clamp(3.4rem,8vw,6.8rem)] font-semibold leading-[0.88] tracking-[-0.075em]">
             Talk to
@@ -105,47 +105,18 @@ export function LandingPage() {
           <div className="hero-halo left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2" />
           <GlassCard className="relative overflow-hidden rounded-[34px] p-3 shadow-[0_40px_120px_rgba(0,0,0,.5)]">
             <div className="absolute inset-x-16 top-0 h-px bg-gradient-to-r from-transparent via-white/50 to-transparent" />
-            <div className="rounded-[26px] border border-white/[0.08] bg-[#0d0b13]/90 p-4 sm:p-5">
-              <div className="flex items-center justify-between border-b border-white/[0.07] pb-4">
-                <div>
-                  <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-white/30">Live connection</p>
-                  <div className="mt-1.5 flex items-center gap-2 text-sm font-bold">
-                    <span className="status-dot" /> You&apos;re connected
-                  </div>
-                </div>
-                <div className="rounded-full border border-[#78f7df]/15 bg-[#78f7df]/[0.07] px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-wider text-[#a2f9e8]">
-                  Good vibes
-                </div>
+            <div className="relative overflow-hidden rounded-[26px] border border-white/[0.08] bg-[#0d0b13]/90 p-5 sm:p-7">
+              <div className="absolute right-[-15%] top-[-10%] size-56 rounded-full bg-[#78f7df]/10 blur-[70px]" />
+              <div className="relative flex items-center justify-between border-b border-white/[0.07] pb-5">
+                <div><p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-white/30">Real-human matching</p><p className="mt-1.5 text-sm font-bold">How every room begins</p></div>
+                <ShieldCheck className="size-6 text-[#78f7df]" />
               </div>
-
-              <div className="relative grid grid-cols-2 gap-3 py-4 sm:gap-4 sm:py-5">
-                <div className="relative aspect-[.9] overflow-hidden rounded-[24px] border border-white/10 bg-gradient-to-br from-[#2e174d] to-[#11111c]">
-                  <div className="absolute -left-10 top-3 size-32 rounded-full bg-[#8d51ff]/25 blur-3xl" />
-                  <div className="absolute bottom-0 left-1/2 h-[82%] w-[74%] -translate-x-1/2 rounded-t-[999px] bg-gradient-to-b from-[#a86eff] to-[#532c97] opacity-65" />
-                  <div className="absolute left-1/2 top-[18%] size-[39%] -translate-x-1/2 rounded-full bg-gradient-to-br from-[#d8c0ff] to-[#8667bd] shadow-[0_0_50px_rgba(198,161,255,.25)]" />
-                  <div className="absolute bottom-3 left-3 rounded-full bg-black/35 px-2.5 py-1 text-[10px] font-bold backdrop-blur-md">You</div>
-                  <div className="absolute right-3 top-3 grid size-7 place-items-center rounded-full bg-black/35 backdrop-blur-md"><Mic2 className="size-3.5" /></div>
-                </div>
-                <div className="relative aspect-[.9] overflow-hidden rounded-[24px] border border-white/10 bg-gradient-to-br from-[#183f46] to-[#10171a]">
-                  <div className="absolute -right-8 top-3 size-32 rounded-full bg-[#6ef4da]/20 blur-3xl" />
-                  <div className="absolute bottom-0 left-1/2 h-[82%] w-[74%] -translate-x-1/2 rounded-t-[999px] bg-gradient-to-b from-[#46bdb3] to-[#215e60] opacity-70" />
-                  <div className="absolute left-1/2 top-[18%] size-[39%] -translate-x-1/2 rounded-full bg-gradient-to-br from-[#c2fff3] to-[#67a9a6] shadow-[0_0_50px_rgba(113,246,222,.2)]" />
-                  <div className="absolute bottom-3 left-3 flex items-center gap-1.5 rounded-full bg-black/35 px-2.5 py-1 text-[10px] font-bold backdrop-blur-md"><span className="status-dot !size-1.5" /> Luna</div>
-                </div>
-              </div>
-
-              <div className="rounded-[20px] border border-white/[0.08] bg-white/[0.045] p-3.5">
-                <div className="flex gap-3">
-                  <div className="profile-gradient-2 grid size-8 shrink-0 place-items-center rounded-full text-[10px] font-black text-[#092422]">LU</div>
-                  <div>
-                    <div className="flex items-center gap-2 text-xs"><span className="font-bold">Luna</span><span className="text-[10px] text-white/30">just now</span></div>
-                    <p className="mt-1 text-xs leading-5 text-white/62">wait you like studio ghibli too? ✨</p>
-                  </div>
-                </div>
-              </div>
-              <div className="mt-3 flex items-center gap-2 rounded-full border border-white/[0.08] bg-black/20 py-2 pl-4 pr-2 text-xs text-white/28">
-                Say something nice...
-                <span className="ml-auto grid size-8 place-items-center rounded-full bg-white text-[#0a0910]"><ArrowRight className="size-3.5" /></span>
+              <div className="relative mt-5 grid gap-3">
+                {[
+                  { icon: UserRoundPlus, title: "You join the live queue", copy: "Your active browser session sends a heartbeat every 10 seconds." },
+                  { icon: HeartHandshake, title: "Another real person appears", copy: "We only propose someone online, searching, and using the same mode." },
+                  { icon: Check, title: "Both people accept", copy: "Only then is a private text, voice, or video room created." },
+                ].map(({ icon: Icon, title, copy }, index) => <div key={title} className="flex gap-4 rounded-[20px] border border-white/[0.07] bg-white/[0.035] p-4"><span className="grid size-10 shrink-0 place-items-center rounded-xl bg-white/[0.06] text-[#8df6e1]"><Icon className="size-[18px]" /></span><div><div className="flex items-center gap-2"><span className="text-[9px] font-black text-white/20">0{index + 1}</span><h3 className="text-xs font-extrabold">{title}</h3></div><p className="mt-1.5 text-[11px] leading-5 text-white/38">{copy}</p></div></div>)}
               </div>
             </div>
           </GlassCard>
@@ -156,8 +127,8 @@ export function LandingPage() {
             className="glass-card absolute -bottom-6 -left-3 hidden rounded-2xl px-4 py-3 sm:flex lg:-left-12"
           >
             <div className="flex items-center gap-2.5">
-              <div className="grid size-8 place-items-center rounded-xl bg-[#ff62b5]/15 text-[#ff83c4]"><Sparkles className="size-4" /></div>
-              <div><p className="text-[10px] font-bold text-white/38">Shared vibe</p><p className="text-xs font-extrabold">Anime + Music</p></div>
+              <div className="grid size-8 place-items-center rounded-xl bg-[#ff62b5]/15 text-[#ff83c4]"><ShieldCheck className="size-4" /></div>
+              <div><p className="text-[10px] font-bold text-white/38">No fallback system</p><p className="text-xs font-extrabold">Wait for a real person</p></div>
             </div>
           </motion.div>
         </motion.div>

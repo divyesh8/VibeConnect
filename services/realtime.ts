@@ -3,6 +3,7 @@ import { getBrowserSupabase } from "@/services/supabase";
 import type { ChatMessage } from "@/types";
 
 export type SignalPayload =
+  | { kind: "ready"; senderId: string }
   | { kind: "offer"; sdp: RTCSessionDescriptionInit; senderId: string }
   | { kind: "answer"; sdp: RTCSessionDescriptionInit; senderId: string }
   | { kind: "ice"; candidate: RTCIceCandidateInit; senderId: string };
@@ -34,7 +35,7 @@ export async function subscribeToRoom(
           id: String(row.id),
           roomId: String(row.room_id),
           senderId: String(row.sender_id),
-          senderName: "Stranger",
+          senderName: "",
           content: String(row.content),
           createdAt: String(row.created_at),
           seenAt: row.seen_at ? String(row.seen_at) : null,

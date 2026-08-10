@@ -31,10 +31,11 @@ import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { GlassCard } from "@/components/ui/glass-card";
 import { useRoomChat } from "@/hooks/use-room-chat";
+import { useSessionHeartbeat } from "@/hooks/use-session-heartbeat";
 import { useWebRTC } from "@/hooks/use-webrtc";
 import { getLocalProfile } from "@/lib/session";
 import { cn, initials } from "@/lib/utils";
-import type { AnonymousProfile, CommunicationMode, ReportReason } from "@/types";
+import type { AnonymousProfile, CommunicationMode, LiveRoomContext, ReportReason } from "@/types";
 
 const reportReasons: { value: ReportReason; label: string }[] = [
   { value: "harassment", label: "Harassment" },
@@ -54,8 +55,8 @@ function StreamVideo({ stream, muted, className }: { stream: MediaStream | null;
   return <video ref={ref} autoPlay playsInline muted={muted} className={className} />;
 }
 
-function MediaStage({ profile, mode, roomId }: { profile: AnonymousProfile; mode: CommunicationMode; roomId: string }) {
-  const media = useWebRTC(mode, roomId, profile.id);
+function MediaStage({ profile, partner, mode, roomId, initiator }: { profile: AnonymousProfile; partner: LiveRoomContext["partner"]; mode: CommunicationMode; roomId: string; initiator: boolean }) {
+  const media = useWebRTC(mode, roomId, profile.id, initiator);
   const connected = Boolean(media.localStream);
 
   return (
@@ -63,8 +64,8 @@ function MediaStage({ profile, mode, roomId }: { profile: AnonymousProfile; mode
       {mode === "video" ? (
         <div className="relative grid min-h-[430px] flex-1 gap-2 p-2 md:grid-cols-2">
           <div className="relative overflow-hidden rounded-[19px] border border-white/[0.08] bg-gradient-to-br from-[#203d40] to-[#101416]">
-            {media.remoteStream ? <StreamVideo stream={media.remoteStream} className="absolute inset-0 size-full object-cover" /> : <><div className="absolute left-1/2 top-1/2 size-72 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#78f7df]/10 blur-[80px]" /><div className="absolute left-1/2 top-1/2 grid size-28 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-[38px] bg-gradient-to-br from-[#78f7df] to-[#587dff] font-display text-3xl font-black text-[#071313] shadow-2xl">N</div></>}
-            <div className="absolute bottom-4 left-4 flex items-center gap-2 rounded-full bg-black/35 px-3 py-1.5 text-xs font-bold backdrop-blur-md"><span className="status-dot !size-1.5" /> Nova</div>
+            {media.remoteStream ? <StreamVideo stream={media.remoteStream} className="absolute inset-0 size-full object-cover" /> : <><div className="absolute left-1/2 top-1/2 size-72 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#78f7df]/10 blur-[80px]" /><div className="absolute left-1/2 top-1/2 grid size-28 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-[38px] bg-gradient-to-br from-[#78f7df] to-[#587dff] font-display text-3xl font-black text-[#071313] shadow-2xl">{initials(partner.username)}</div></>}
+            <div className="absolute bottom-4 left-4 flex items-center gap-2 rounded-full bg-black/35 px-3 py-1.5 text-xs font-bold backdrop-blur-md"><span className="status-dot !size-1.5" /> {partner.username}</div>
             <div className="absolute right-4 top-4 flex h-8 items-end gap-1 rounded-full bg-black/30 px-3 py-2 backdrop-blur-md">
               {[1, 2, 3, 4].map((bar) => <span key={bar} className="signal-bar !w-[3px]" />)}
             </div>
@@ -87,10 +88,10 @@ function MediaStage({ profile, mode, roomId }: { profile: AnonymousProfile; mode
           <div className="absolute left-1/2 top-1/2 size-96 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#9d78ff]/10 blur-[100px]" />
           <motion.div animate={{ scale: connected ? [1, 1.05, 1] : 1 }} transition={{ duration: 2, repeat: Infinity }} className="relative">
             <div className="absolute -inset-8 rounded-[58px] border border-[#78f7df]/10" />
-            <div className="profile-gradient-2 grid size-32 place-items-center rounded-[44px] font-display text-4xl font-black text-[#0c2a26] shadow-[0_0_80px_rgba(120,247,223,.16)]">N</div>
+            <div className="profile-gradient-2 grid size-32 place-items-center rounded-[44px] font-display text-4xl font-black text-[#0c2a26] shadow-[0_0_80px_rgba(120,247,223,.16)]">{initials(partner.username)}</div>
             <span className="absolute -bottom-2 -right-2 grid size-10 place-items-center rounded-full border-4 border-[#0a0910] bg-[#78f7df] text-black"><Volume2 className="size-4" /></span>
           </motion.div>
-          <h2 className="relative mt-10 font-display text-2xl font-bold tracking-[-.04em]">Talking with Nova</h2>
+          <h2 className="relative mt-10 font-display text-2xl font-bold tracking-[-.04em]">Talking with {partner.username}</h2>
           <p className="relative mt-2 text-xs text-white/35">Your audio is peer-to-peer and is never recorded.</p>
           <div className="relative mt-7 flex h-9 items-end gap-1.5">
             {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((bar) => <span key={bar} className="signal-bar" />)}
@@ -128,19 +129,37 @@ function MediaStage({ profile, mode, roomId }: { profile: AnonymousProfile; mode
 export function ChatRoom({ roomId }: { roomId: string }) {
   const router = useRouter();
   const [profile, setProfile] = useState<AnonymousProfile | null>(null);
+  const [liveRoom, setLiveRoom] = useState<LiveRoomContext | null>(null);
+  const [roomError, setRoomError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [ended, setEnded] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const { messages, partnerTyping, sendMessage, announceTyping } = useRoomChat(roomId, profile);
+  const { messages, partnerTyping, sendMessage, announceTyping } = useRoomChat(roomId, liveRoom ? profile : null);
+  useSessionHeartbeat(Boolean(liveRoom && !ended), () => setEnded(true));
 
   useEffect(() => {
     const stored = getLocalProfile();
-    if (!stored) router.replace("/start");
-    else queueMicrotask(() => setProfile(stored));
-  }, [router]);
+    if (!stored) {
+      router.replace("/start");
+      return;
+    }
+    let active = true;
+    void (async () => {
+      setProfile(stored);
+      try {
+        const response = await fetch(`/api/rooms/${encodeURIComponent(roomId)}`, { cache: "no-store" });
+        const data = await response.json() as LiveRoomContext & { error?: string };
+        if (!response.ok || data.status !== "active" || !data.partner) throw new Error(data.error ?? "This room is no longer active.");
+        if (active) setLiveRoom(data);
+      } catch (error) {
+        if (active) setRoomError(error instanceof Error ? error.message : "This live room could not be verified.");
+      }
+    })();
+    return () => { active = false; };
+  }, [roomId, router]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -156,28 +175,39 @@ export function ChatRoom({ roomId }: { roomId: string }) {
 
   async function endConversation() {
     setEnded(true);
-    try { await fetch("/api/rooms/end", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ roomId }) }); } catch { /* preview */ }
+    await fetch("/api/rooms/end", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ roomId }) }).catch(() => undefined);
   }
 
   async function submitReport(reason: ReportReason) {
-    try { await fetch("/api/reports", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ roomId, reportedUserId: "partner", reason }) }); } catch { /* preview */ }
+    if (!liveRoom) return;
+    const response = await fetch("/api/reports", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ roomId, reportedUserId: liveRoom.partner.id, reason }) }).catch(() => null);
     setReportOpen(false);
-    setNotice("Report received. Thank you for helping keep VibeConnect kind.");
+    setNotice(response?.ok ? "Report received. Thank you for helping keep VibeConnect kind." : "The report could not be submitted. Please try again.");
     window.setTimeout(() => setNotice(null), 4200);
   }
 
   async function blockPartner() {
-    try { await fetch("/api/blocks", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ blockedUserId: "partner" }) }); } catch { /* preview */ }
+    if (!liveRoom) return;
+    const response = await fetch("/api/blocks", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ blockedUserId: liveRoom.partner.id }) }).catch(() => null);
     setMenuOpen(false);
-    setNotice("Nova was blocked. You won’t be matched again.");
-    endConversation();
+    if (!response?.ok) {
+      setNotice("The block could not be saved. Please try again.");
+      return;
+    }
+    setNotice(`${liveRoom.partner.username} was blocked. You won’t be matched again.`);
+    await endConversation();
   }
 
-  if (!profile) {
+  if (roomError) {
+    return <main className="app-page grid min-h-screen place-items-center px-5"><AmbientBackground /><GlassCard className="relative max-w-md rounded-[28px] p-8 text-center"><X className="mx-auto size-7 text-rose-300" /><h1 className="mt-5 font-display text-3xl font-bold">Room unavailable</h1><p className="mt-3 text-sm leading-6 text-white/40">{roomError}</p><Button className="mt-6" onClick={() => router.replace("/matching")}>Return to matching</Button></GlassCard></main>;
+  }
+
+  if (!profile || !liveRoom) {
     return <main className="app-page grid min-h-screen place-items-center"><AmbientBackground /><div className="flex items-center gap-3 text-sm font-bold text-white/45"><span className="status-dot" /> Loading your conversation...</div></main>;
   }
 
-  const isText = profile.mode === "text";
+  const isText = liveRoom.mode === "text";
+  const sharedInterests = profile.interests.filter((interest) => liveRoom.partner.interests.includes(interest));
 
   return (
     <main className="app-page flex h-[100dvh] flex-col overflow-hidden p-3 sm:p-4">
@@ -208,8 +238,8 @@ export function ChatRoom({ roomId }: { roomId: string }) {
         <GlassCard className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-[28px] p-2 sm:p-3">
           <div className="flex shrink-0 items-center justify-between px-3 py-2.5 sm:px-4 sm:py-3">
             <div className="flex items-center gap-3">
-              <div className="profile-gradient-2 relative grid size-10 place-items-center rounded-[14px] font-display text-sm font-black text-[#0b2823]">N<span className="absolute -bottom-1 -right-1 size-3 rounded-full border-2 border-[#15121d] bg-[#7dffb6]" /></div>
-              <div><div className="flex items-center gap-2"><h1 className="text-sm font-extrabold">Nova</h1><span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[8px] font-black uppercase tracking-wider text-white/36">stranger</span></div><p className="mt-0.5 text-[10px] text-white/30">Matched on Music + Travel</p></div>
+              <div className="profile-gradient-2 relative grid size-10 place-items-center rounded-[14px] font-display text-sm font-black text-[#0b2823]">{initials(liveRoom.partner.username)}<span className="absolute -bottom-1 -right-1 size-3 rounded-full border-2 border-[#15121d] bg-[#7dffb6]" /></div>
+              <div><div className="flex items-center gap-2"><h1 className="text-sm font-extrabold">{liveRoom.partner.username}</h1><span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[8px] font-black uppercase tracking-wider text-white/36">live</span></div><p className="mt-0.5 text-[10px] text-white/30">{sharedInterests.length ? `Shared: ${sharedInterests.join(" + ")}` : `Connected in ${liveRoom.mode} mode`}</p></div>
             </div>
             <div className="hidden items-center gap-2 text-[10px] font-bold text-white/25 sm:flex"><Sparkles className="size-3 text-[#ff86c5]" /> Keep it friendly</div>
           </div>
@@ -222,7 +252,7 @@ export function ChatRoom({ roomId }: { roomId: string }) {
                   const mine = message.senderId === profile.id;
                   return (
                     <motion.div key={message.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className={cn("flex max-w-[86%] gap-2.5 sm:max-w-[72%]", mine ? "ml-auto flex-row-reverse" : "")}>
-                      {!mine && <div className="profile-gradient-2 mt-1 grid size-7 shrink-0 place-items-center rounded-[10px] text-[9px] font-black text-[#0b2823]">N</div>}
+                      {!mine && <div className="profile-gradient-2 mt-1 grid size-7 shrink-0 place-items-center rounded-[10px] text-[9px] font-black text-[#0b2823]">{initials(liveRoom.partner.username)}</div>}
                       <div>
                         <div className={cn("rounded-[19px] px-4 py-3 text-[13px] leading-5", mine ? "rounded-tr-[6px] bg-white text-[#131018]" : "rounded-tl-[6px] border border-white/[0.08] bg-white/[0.065] text-white/72")}>
                           {message.content}
@@ -235,7 +265,7 @@ export function ChatRoom({ roomId }: { roomId: string }) {
                     </motion.div>
                   );
                 })}
-                {partnerTyping && <div className="flex items-center gap-2 text-[10px] font-bold text-white/27"><div className="profile-gradient-2 grid size-7 place-items-center rounded-[10px] text-[9px] font-black text-[#0b2823]">N</div><span className="rounded-full bg-white/[0.06] px-3 py-2">Nova is typing<span className="ml-1 animate-pulse">...</span></span></div>}
+                {partnerTyping && <div className="flex items-center gap-2 text-[10px] font-bold text-white/27"><div className="profile-gradient-2 grid size-7 place-items-center rounded-[10px] text-[9px] font-black text-[#0b2823]">{initials(liveRoom.partner.username)}</div><span className="rounded-full bg-white/[0.06] px-3 py-2">{liveRoom.partner.username} is typing<span className="ml-1 animate-pulse">...</span></span></div>}
                 <div ref={messagesEndRef} />
               </div>
 
@@ -248,7 +278,7 @@ export function ChatRoom({ roomId }: { roomId: string }) {
                     rows={1}
                     placeholder="Say something nice..."
                     className="max-h-28 min-h-9 flex-1 resize-none bg-transparent py-2 text-sm text-white outline-none placeholder:text-white/20"
-                    aria-label="Message Nova"
+                    aria-label={`Message ${liveRoom.partner.username}`}
                   />
                   <button type="button" onClick={() => setDraft((value) => `${value} ✨`)} className="grid size-10 shrink-0 place-items-center rounded-full text-white/30 transition hover:bg-white/[0.06] hover:text-white" aria-label="Add emoji"><SmilePlus className="size-[18px]" /></button>
                   <Button type="submit" size="icon" disabled={!draft.trim()} aria-label="Send message"><Send className="size-4" /></Button>
@@ -257,7 +287,7 @@ export function ChatRoom({ roomId }: { roomId: string }) {
               </form>
             </div>
           ) : (
-            <MediaStage profile={profile} mode={profile.mode} roomId={roomId} />
+            <MediaStage profile={profile} partner={liveRoom.partner} mode={liveRoom.mode} roomId={roomId} initiator={liveRoom.initiator} />
           )}
         </GlassCard>
 
@@ -266,7 +296,7 @@ export function ChatRoom({ roomId }: { roomId: string }) {
             <div className="flex items-center justify-between"><div className="eyebrow"><Heart className="size-3.5 text-[#ff76bc]" /> Your vibe</div><ChevronDown className="size-4 text-white/20" /></div>
             <div className="mt-6 flex items-center gap-3">
               <div className="profile-gradient-1 grid size-12 place-items-center rounded-2xl font-display text-sm font-black">{initials(profile.username)}</div>
-              <div><p className="text-sm font-extrabold">{profile.username}</p><p className="mt-0.5 text-[10px] capitalize text-white/30">{profile.mode} · anonymous</p></div>
+              <div><p className="text-sm font-extrabold">{profile.username}</p><p className="mt-0.5 text-[10px] capitalize text-white/30">{liveRoom.mode} · anonymous</p></div>
             </div>
             <div className="mt-5 flex flex-wrap gap-1.5">
               {(profile.interests.length ? profile.interests : ["Random"]).map((interest) => <span key={interest} className="rounded-full border border-white/[0.07] bg-white/[0.04] px-2.5 py-1 text-[9px] font-bold text-white/36">{interest}</span>)}

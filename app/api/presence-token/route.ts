@@ -4,15 +4,12 @@ import { getSessionUser } from "@/lib/server/session";
 import { createServerSupabase } from "@/services/supabase";
 
 export async function GET(request: NextRequest) {
+  const supabase = createServerSupabase();
+  if (!supabase) return NextResponse.json({ error: "Presence is not configured." }, { status: 503 });
   const user = await getSessionUser(request);
   if (!user) return NextResponse.json({ error: "Session expired." }, { status: 401 });
-  const roomId = request.nextUrl.searchParams.get("roomId");
-  if (!roomId || !/^[0-9a-f-]{36}$/i.test(roomId)) return NextResponse.json({ error: "Invalid room." }, { status: 400 });
-  const supabase = createServerSupabase();
-  if (!supabase) return NextResponse.json({ error: "Realtime is not configured." }, { status: 503 });
-  const { data: membership } = await supabase.from("room_members").select("room_id").eq("room_id", roomId).eq("user_id", user.id).maybeSingle();
-  if (!membership) return NextResponse.json({ error: "Not a room member." }, { status: 403 });
-
+  const mode = request.nextUrl.searchParams.get("mode");
+  if (mode !== user.communication_mode) return NextResponse.json({ error: "Invalid queue." }, { status: 403 });
   const token = await signRealtimeToken(String(user.id));
   if (!token) return NextResponse.json({ error: "Realtime is not configured." }, { status: 503 });
   return NextResponse.json({ token });

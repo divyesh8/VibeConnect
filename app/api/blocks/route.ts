@@ -9,9 +9,10 @@ export async function POST(request: NextRequest) {
   const parsed = blockSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success || parsed.data.blockedUserId === user.id) return NextResponse.json({ error: "Invalid block request." }, { status: 400 });
   const supabase = createServerSupabase();
-  if (supabase) {
-    const { error } = await supabase.from("blocks").upsert({ blocker_id: user.id, blocked_id: parsed.data.blockedUserId });
-    if (error) return NextResponse.json({ error: "Block could not be saved." }, { status: 503 });
-  }
+  if (!supabase) return NextResponse.json({ error: "Live safety controls are unavailable." }, { status: 503 });
+  const { data: blockedUser } = await supabase.from("online_users").select("id").eq("id", parsed.data.blockedUserId).maybeSingle();
+  if (!blockedUser) return NextResponse.json({ error: "That user no longer exists." }, { status: 404 });
+  const { error } = await supabase.from("blocks").upsert({ blocker_id: user.id, blocked_id: parsed.data.blockedUserId });
+  if (error) return NextResponse.json({ error: "Block could not be saved." }, { status: 503 });
   return NextResponse.json({ blocked: true }, { status: 201 });
 }

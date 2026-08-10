@@ -23,7 +23,7 @@ copy .env.example .env.local
 npm run dev
 ```
 
-The interface runs in preview mode without credentials. Live matching, persistent messages, private Realtime channels, and admin data require Supabase configuration.
+Supabase configuration is required for sessions, matching, rooms, messages, presence, and admin data. When live infrastructure is unavailable, the application shows an error and never creates a simulated user, conversation, or match.
 
 ## Vercel deployment
 
@@ -38,7 +38,7 @@ Add the variables from [`.env.example`](.env.example), then redeploy. If the Ver
 
 ## Production data setup
 
-Run [`supabase/schema.sql`](supabase/schema.sql) in a new Supabase project, configure the values from [`.env.example`](.env.example), and follow [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). The system design and security boundaries are documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+Run [`supabase/schema.sql`](supabase/schema.sql) in a new Supabase project. For an existing project, run [`supabase/migrations/002_real_human_only_matching.sql`](supabase/migrations/002_real_human_only_matching.sql) first and then apply the current schema. Configure the values from [`.env.example`](.env.example), and follow [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). The system design and security boundaries are documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 The optional `npm run build:sites` command preserves the existing Cloudflare/Sites package path; it is not the Vercel build command.
 

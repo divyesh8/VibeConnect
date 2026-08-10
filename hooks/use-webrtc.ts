@@ -6,7 +6,7 @@ import { leaveRoomChannel, sendSignal, subscribeToRoom, type SignalPayload } fro
 import type { CommunicationMode } from "@/types";
 import { PeerManager, type PeerSignal } from "@/webrtc/peer-manager";
 
-export function useWebRTC(mode: CommunicationMode, roomId: string, userId: string) {
+export function useWebRTC(mode: CommunicationMode, roomId: string, userId: string, initiator: boolean) {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [micEnabled, setMicEnabled] = useState(true);
@@ -39,20 +39,19 @@ export function useWebRTC(mode: CommunicationMode, roomId: string, userId: strin
       const channel = await subscribeToRoom(roomId, {
         onSignal: async (signal) => {
           if (signal.senderId === userId || !peerRef.current) return;
+          if (signal.kind === "ready" && initiator) await peerRef.current.createOffer();
           if (signal.kind === "offer") await peerRef.current.acceptOffer(signal.sdp);
           if (signal.kind === "answer") await peerRef.current.acceptAnswer(signal.sdp);
           if (signal.kind === "ice") await peerRef.current.addIceCandidate(signal.candidate);
         },
       });
       channelRef.current = channel;
-
-      const roomResponse = await fetch(`/api/rooms/${encodeURIComponent(roomId)}`);
-      const room = roomResponse.ok ? await roomResponse.json() as { initiator: boolean } : { initiator: false };
-      if (room.initiator) await peer.createOffer();
+      await sendSignal(channel, { kind: "ready", senderId: userId });
+      if (initiator) await peer.createOffer();
     } catch (error) {
       setPermissionError(error instanceof DOMException && error.name === "NotAllowedError" ? "Camera or microphone access was blocked." : "We could not start your camera or microphone.");
     }
-  }, [mode, roomId, userId]);
+  }, [initiator, mode, roomId, userId]);
 
   const toggleMic = useCallback(() => {
     setMicEnabled((enabled) => {

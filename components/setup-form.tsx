@@ -72,30 +72,14 @@ export function SetupForm() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ username: cleanUsername, gender, mode, interests }),
       });
-      const data = response.ok ? await response.json() as { profile?: AnonymousProfile } : null;
-      const profile: AnonymousProfile = data?.profile ?? {
-        id: crypto.randomUUID(),
-        sessionId: crypto.randomUUID(),
-        username: cleanUsername,
-        gender,
-        mode,
-        interests,
-        createdAt: new Date().toISOString(),
-      };
+      const data = await response.json() as { profile?: AnonymousProfile; error?: string };
+      if (!response.ok || !data.profile) throw new Error(data.error ?? "Live matching is unavailable.");
+      const profile = data.profile;
       saveLocalProfile(profile);
       router.push("/matching");
-    } catch {
-      const profile: AnonymousProfile = {
-        id: crypto.randomUUID(),
-        sessionId: crypto.randomUUID(),
-        username: cleanUsername,
-        gender,
-        mode,
-        interests,
-        createdAt: new Date().toISOString(),
-      };
-      saveLocalProfile(profile);
-      router.push("/matching");
+    } catch (submissionError) {
+      setError(submissionError instanceof Error ? submissionError.message : "Live matching is unavailable. Please try again shortly.");
+      setSubmitting(false);
     }
   }
 
@@ -156,7 +140,7 @@ export function SetupForm() {
                     id="username"
                     value={username}
                     onChange={(event) => setUsername(event.target.value.slice(0, 20))}
-                    placeholder="e.g. ShadowWolf"
+                    placeholder="3–20 characters"
                     autoComplete="off"
                     className="h-13 w-full rounded-2xl border border-white/10 bg-black/20 px-4 pr-16 text-sm font-semibold text-white outline-none transition placeholder:text-white/20 focus:border-[#78f7df]/45 focus:ring-4 focus:ring-[#78f7df]/[0.07]"
                   />

@@ -13,37 +13,7 @@ export function useRoomChat(roomId: string, profile: AnonymousProfile | null) {
 
   useEffect(() => {
     if (!profile) return;
-    const now = Date.now();
-    const previewMessages: ChatMessage[] = [
-      {
-        id: "welcome-1",
-        roomId,
-        senderId: "partner",
-        senderName: "Nova",
-        content: "hey! looks like we both picked music 🎧",
-        createdAt: new Date(now - 65_000).toISOString(),
-        seenAt: new Date(now - 63_000).toISOString(),
-      },
-      {
-        id: "welcome-2",
-        roomId,
-        senderId: profile.id,
-        senderName: profile.username,
-        content: "instant good sign. what have you had on repeat lately?",
-        createdAt: new Date(now - 40_000).toISOString(),
-        seenAt: new Date(now - 35_000).toISOString(),
-      },
-      {
-        id: "welcome-3",
-        roomId,
-        senderId: "partner",
-        senderName: "Nova",
-        content: "honestly? a lot of indie pop and lo-fi. you?",
-        createdAt: new Date(now - 12_000).toISOString(),
-        seenAt: new Date(now - 10_000).toISOString(),
-      },
-    ];
-    queueMicrotask(() => setMessages(previewMessages));
+    queueMicrotask(() => setMessages([]));
 
     let active = true;
     void subscribeToRoom(roomId, {
@@ -87,8 +57,7 @@ export function useRoomChat(roomId: string, profile: AnonymousProfile | null) {
       });
       setMessages((current) => current.map((message) => message.id === optimistic.id ? { ...message, status: response.ok ? "sent" : "failed" } : message));
     } catch {
-      // Offline preview still lets the user experience the conversation.
-      setMessages((current) => current.map((message) => message.id === optimistic.id ? { ...message, status: "sent" } : message));
+      setMessages((current) => current.map((message) => message.id === optimistic.id ? { ...message, status: "failed" } : message));
     }
   }, [profile, roomId]);
 

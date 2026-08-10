@@ -8,7 +8,8 @@ No account is created. Starting a session generates a user UUID, public session 
 
 ## Database design
 
-- `users_online`: temporary identity, matching preferences, queue state, heartbeat, and warning count.
+- `online_users`: temporary identity, matching preferences, queue state, ten-second heartbeat, and warning count.
+- `match_proposals`: two-person acceptance handshake with a short expiration window.
 - `chat_rooms` + `room_members`: room lifecycle and membership authorization.
 - `messages`: durable text history with delivery/seen timestamps.
 - `blocks`: symmetric matching exclusion, checked in both directions.
@@ -21,7 +22,9 @@ All application tables use RLS. Anonymous and regular authenticated database wri
 
 ## Matching algorithm
 
-`match_anonymous_user` runs in one PostgreSQL transaction. It locks the requester, scans compatible waiting users with `FOR UPDATE SKIP LOCKED`, and excludes active bans, blocks, stale heartbeats, and pairs seen in the previous 24 hours. Candidates rank by preferred gender pairing, number of shared interests, optional age group, and queue wait time. Room creation, membership creation, and both presence updates happen atomically, preventing double matches under load.
+`propose_real_match` locks the requester, scans same-mode searching users with `FOR UPDATE SKIP LOCKED`, and excludes active bans, blocks, stale heartbeats, and pairs seen in the previous 24 hours. If nobody eligible is live, the requester remains in the queue indefinitely. The browser also joins a private Supabase Realtime Presence topic for its communication mode and refreshes `last_seen` every ten seconds.
+
+A candidate creates only a time-limited `match_proposals` row and moves both users into `confirming`. Each browser must call `accept_real_match`; only when both live sessions accept does PostgreSQL atomically create the room, add both memberships, and mark both users connected. A decline, timeout, cancellation, lost heartbeat, or closed browser returns any remaining live user to searching. There is no generated identity or automated conversation path.
 
 ## Realtime chat
 
@@ -33,8 +36,8 @@ Voice and video permissions are requested only after a user gesture. Each peer a
 
 ## Safety and operations
 
-Messages use the OpenAI `omni-moderation-latest` endpoint when `OPENAI_API_KEY` is configured, with a deterministic emergency filter as a fallback. Flagged content is rejected before storage, increments the sender warning count, and produces a temporary 24-hour ban after repeated violations. The hidden admin route requires `ADMIN_ACCESS_TOKEN`; the local UI accepts `preview` only for non-live sample data.
+Messages use the OpenAI `omni-moderation-latest` endpoint when `OPENAI_API_KEY` is configured, with a deterministic emergency filter if the moderation service is unavailable. Flagged content is rejected before storage, increments the sender warning count, and produces a temporary 24-hour ban after repeated violations. The hidden admin route requires `ADMIN_ACCESS_TOKEN` and displays only current database counts and reports.
 
 ## Scaling notes
 
-Stateless app instances can scale horizontally on Vercel. Matching concurrency and rate limits live in PostgreSQL, Realtime fans out chat and signaling events, and WebRTC keeps media bandwidth off the application. A scheduled cleanup should mark heartbeats older than 90 seconds offline, end orphaned rooms, remove expired rate-limit buckets, and delete anonymous presence according to the product retention policy.
+Stateless app instances can scale horizontally on Vercel. Matching concurrency and rate limits live in PostgreSQL, Realtime fans out presence, chat, and signaling events, and WebRTC keeps media bandwidth off the application. Match queries reject heartbeats older than 25 seconds and release expired proposals transactionally. A scheduled cleanup should also mark stale sessions offline, end orphaned rooms, remove expired rate-limit buckets, and delete anonymous presence according to the product retention policy.
