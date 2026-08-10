@@ -79,7 +79,7 @@ export function useWebRTC(mode: CommunicationMode, roomId: string, userId: strin
     currentTrack.stop();
     streamRef.current?.removeTrack(currentTrack);
     streamRef.current?.addTrack(nextTrack);
-    setLocalStream(new MediaStream(streamRef.current?.getTracks()));
+    setLocalStream(new MediaStream(streamRef.current?.getTracks() ?? []));
   }, []);
 
   useEffect(() => () => {
