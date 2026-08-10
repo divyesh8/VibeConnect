@@ -19,8 +19,10 @@ export function TemporaryProfile() {
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    setProfile(getLocalProfile());
-    setLoaded(true);
+    queueMicrotask(() => {
+      setProfile(getLocalProfile());
+      setLoaded(true);
+    });
   }, []);
 
   function reset() {

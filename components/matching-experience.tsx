@@ -39,7 +39,7 @@ export function MatchingExperience() {
       router.replace("/start");
       return;
     }
-    setProfile(stored);
+    queueMicrotask(() => setProfile(stored));
 
     const timer = window.setInterval(() => setSeconds((value) => value + 1), 1000);
     let active = true;

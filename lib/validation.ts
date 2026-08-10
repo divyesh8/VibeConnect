@@ -23,8 +23,11 @@ export const blockSchema = z.object({ blockedUserId: z.string().min(1).max(80) }
 export const endRoomSchema = z.object({ roomId: z.string().uuid() });
 
 export function cleanText(value: string) {
-  return value
-    .normalize("NFKC")
-    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
+  return Array.from(value.normalize("NFKC"))
+    .filter((character) => {
+      const code = character.charCodeAt(0);
+      return code === 9 || code === 10 || code === 13 || (code >= 32 && code !== 127);
+    })
+    .join("")
     .trim();
 }

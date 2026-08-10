@@ -11,7 +11,6 @@ import {
   Flag,
   FlipHorizontal2,
   Heart,
-  MessageCircleMore,
   Mic,
   MicOff,
   MoreHorizontal,
@@ -50,6 +49,8 @@ function StreamVideo({ stream, muted, className }: { stream: MediaStream | null;
   useEffect(() => {
     if (ref.current) ref.current.srcObject = stream;
   }, [stream]);
+  // Remote WebRTC streams do not have a separate timed-text caption source.
+  // eslint-disable-next-line jsx-a11y/media-has-caption
   return <video ref={ref} autoPlay playsInline muted={muted} className={className} />;
 }
 
@@ -138,7 +139,7 @@ export function ChatRoom({ roomId }: { roomId: string }) {
   useEffect(() => {
     const stored = getLocalProfile();
     if (!stored) router.replace("/start");
-    else setProfile(stored);
+    else queueMicrotask(() => setProfile(stored));
   }, [router]);
 
   useEffect(() => {

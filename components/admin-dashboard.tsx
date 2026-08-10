@@ -30,7 +30,7 @@ export function AdminDashboard() {
     try {
       const response = await fetch("/api/admin/stats", { headers: { authorization: `Bearer ${token}` } });
       if (!response.ok) throw new Error("Access denied");
-      const data = await response.json();
+      const data = await response.json() as Stats;
       setStats(data);
       setUnlocked(true);
     } catch {

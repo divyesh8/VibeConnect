@@ -14,7 +14,7 @@ export function useRoomChat(roomId: string, profile: AnonymousProfile | null) {
   useEffect(() => {
     if (!profile) return;
     const now = Date.now();
-    setMessages([
+    const previewMessages: ChatMessage[] = [
       {
         id: "welcome-1",
         roomId,
@@ -42,7 +42,8 @@ export function useRoomChat(roomId: string, profile: AnonymousProfile | null) {
         createdAt: new Date(now - 12_000).toISOString(),
         seenAt: new Date(now - 10_000).toISOString(),
       },
-    ]);
+    ];
+    queueMicrotask(() => setMessages(previewMessages));
 
     let active = true;
     void subscribeToRoom(roomId, {

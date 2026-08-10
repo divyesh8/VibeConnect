@@ -72,7 +72,7 @@ export function SetupForm() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ username: cleanUsername, gender, mode, interests }),
       });
-      const data = response.ok ? await response.json() : null;
+      const data = response.ok ? await response.json() as { profile?: AnonymousProfile } : null;
       const profile: AnonymousProfile = data?.profile ?? {
         id: crypto.randomUUID(),
         sessionId: crypto.randomUUID(),
