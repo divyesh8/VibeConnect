@@ -38,7 +38,7 @@ Add the variables from [`.env.example`](.env.example), then redeploy. If the Ver
 
 ## Production data setup
 
-Run [`supabase/schema.sql`](supabase/schema.sql) in a new Supabase project. For an existing project, apply [`supabase/migrations/002_real_human_only_matching.sql`](supabase/migrations/002_real_human_only_matching.sql) and then [`supabase/migrations/003_webrtc_room_hardening.sql`](supabase/migrations/003_webrtc_room_hardening.sql). Configure the values from [`.env.example`](.env.example), and follow [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). The system design and audit are documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/WEBRTC_AUDIT.md`](docs/WEBRTC_AUDIT.md).
+Run [`supabase/schema.sql`](supabase/schema.sql) in a new Supabase project. For an existing project, apply [`supabase/migrations/002_real_human_only_matching.sql`](supabase/migrations/002_real_human_only_matching.sql), [`supabase/migrations/003_anonymous_auth_control_plane.sql`](supabase/migrations/003_anonymous_auth_control_plane.sql), and then [`supabase/migrations/004_webrtc_room_hardening.sql`](supabase/migrations/004_webrtc_room_hardening.sql). Configure the values from [`.env.example`](.env.example), and follow [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). The system design and audit are documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/WEBRTC_AUDIT.md`](docs/WEBRTC_AUDIT.md).
 
 The optional `npm run build:sites` command preserves the existing Cloudflare/Sites package path; it is not the Vercel build command.
 

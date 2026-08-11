@@ -1,5 +1,5 @@
 -- WebRTC room lifecycle, strict compatibility, and private Realtime policy hardening.
--- Apply after 002_real_human_only_matching.sql (or use schema.sql for a new project).
+-- Apply after 003_anonymous_auth_control_plane.sql (or use schema.sql for a new project).
 
 begin;
 
