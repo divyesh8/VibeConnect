@@ -42,17 +42,63 @@ test("production source contains no seeded people or conversation shortcuts", as
 
 test("database schema requires live two-person acceptance", async () => {
   const schema = await readFile(new URL("supabase/schema.sql", root), "utf8");
+  const candidateQuery = schema.slice(schema.indexOf("select candidate_row.* into candidate"), schema.indexOf("if candidate.id is null"));
   assert.match(schema, /propose_real_match/);
   assert.match(schema, /accept_real_match/);
   assert.match(schema, /last_seen > now\(\) - interval '25 seconds'/);
   assert.match(schema, /proposal\.user1_accepted and proposal\.user2_accepted/);
   assert.match(schema, /for update of candidate_row skip locked/);
   assert.match(schema, /requester\.gender = 'male' and candidate_row\.gender = 'female'/);
-  assert.match(schema, /requester\.gender = 'other' and candidate_row\.gender = 'other'/);
+  assert.match(candidateQuery, /then 0\s+else 1\s+end/);
+  assert.ok(candidateQuery.indexOf("requester.gender = 'male'") < candidateQuery.indexOf("jsonb_array_elements_text(requester.interests)"));
+  assert.doesNotMatch(candidateQuery.slice(0, candidateQuery.indexOf("order by")), /requester\.gender\s*=/);
   assert.match(schema, /room_members_one_active_room_per_user_idx/);
   assert.match(schema, /is_active_room_member/);
   assert.match(schema, /status = 'active', connected_at = coalesce/);
   assert.doesNotMatch(schema, /create or replace function public\.match_anonymous_user/);
+});
+
+test("media rooms keep room-scoped text chat alongside the call", async () => {
+  const [room, chat, realtime] = await Promise.all([
+    readFile(new URL("components/chat-room.tsx", root), "utf8"),
+    readFile(new URL("hooks/use-room-chat.ts", root), "utf8"),
+    readFile(new URL("services/realtime.ts", root), "utf8"),
+  ]);
+  assert.match(room, /useRoomChat\(roomId, !ended && liveRoom \? profile : null\)/);
+  assert.match(room, /<RoomChatPanel compact/);
+  assert.match(room, /mediaChatOpen \? "flex" : "hidden"/);
+  assert.match(chat, /subscribeToRoom\(roomId,[\s\S]*?, "chat"\)/);
+  assert.match(realtime, /`room:\$\{roomId\}:chat`/);
+  assert.match(realtime, /filter: `room_id=eq\.\$\{roomId\}`/);
+});
+
+test("voice and video calls render audible remote media without replaying on chat input", async () => {
+  const [room, hook, peer] = await Promise.all([
+    readFile(new URL("components/chat-room.tsx", root), "utf8"),
+    readFile(new URL("hooks/use-webrtc.ts", root), "utf8"),
+    readFile(new URL("webrtc/peer-manager.ts", root), "utf8"),
+  ]);
+  assert.match(room, /element\.muted = muted/);
+  assert.match(room, /element\.volume = muted \? 0 : 1/);
+  assert.match(room, /media\.remoteStream && <StreamVideo stream=\{media\.remoteStream\} muted=\{false\}/);
+  assert.match(room, /className="sr-only"/);
+  const streamVideo = room.slice(room.indexOf("function StreamVideo"), room.indexOf("type MediaController"));
+  assert.match(streamVideo, /}, \[muted, ref, stream\]\);/);
+  assert.doesNotMatch(streamVideo, /\[muted, onPlaybackBlocked/);
+  assert.match(hook, /audio: true/);
+  assert.match(hook, /track\.enabled = enabledNext/);
+  assert.match(hook, /toggleMicrophone\(enabledNext\)/);
+  assert.match(peer, /event\.streams\[0\]/);
+  assert.match(peer, /getSenders\(\).*includes\("audio"\)/s);
+});
+
+test("Next tears down the current room before returning to matching", async () => {
+  const room = await readFile(new URL("components/chat-room.tsx", root), "utf8");
+  const next = room.slice(room.indexOf("async function nextConversation"), room.indexOf("async function submitReport"));
+  assert.match(next, /media\.endConnection\("skip"\)/);
+  assert.match(next, /api\/rooms\/end/);
+  assert.match(next, /router\.replace\("\/matching"\)/);
+  assert.ok(next.indexOf("media.endConnection") < next.indexOf("router.replace"));
 });
 
 test("signaling is room-bound and waits for both media-ready peers", async () => {
@@ -82,6 +128,7 @@ test("local media preview is independent from Realtime subscription success", as
   assert.ok(requestIndex >= 0 && previewIndex > requestIndex && subscriptionIndex > previewIndex);
   assert.match(startMedia, /if \(!window\.isSecureContext\)/);
   assert.match(startMedia, /OverconstrainedError|requestLocalMedia/);
+  assert.match(hook, /audio: true,\s+video: mode === "video"/);
   assert.match(realtime, /channel\.subscribe\(\(status, subscriptionError\)/);
   assert.match(realtime, /\[REALTIME\] FULL ERROR:/);
   assert.match(realtime, /ensureAnonymousAuth\(\)/);

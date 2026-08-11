@@ -111,11 +111,11 @@ export function SetupForm() {
   }
 
   return (
-    <main className="app-page min-h-screen px-4 py-4 sm:px-6 sm:py-6">
+    <main className="app-page min-h-screen overflow-x-hidden px-4 py-4 sm:px-6 sm:py-6">
       <AmbientBackground />
       <div className="mx-auto flex w-full max-w-[1180px] items-center justify-between py-2 sm:py-3">
         <Logo />
-        <div className="flex items-center gap-3 text-[10px] font-extrabold uppercase tracking-[.16em] text-white/30">
+        <div className="hidden items-center gap-3 text-[10px] font-extrabold uppercase tracking-[.16em] text-white/30 sm:flex">
           <span className="text-white">Your vibe</span>
           <span className="h-px w-8 bg-white/15" />
           <span>Match</span>

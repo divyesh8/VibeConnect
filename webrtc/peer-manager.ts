@@ -54,10 +54,19 @@ export class PeerManager {
     };
     this.connection.ontrack = (event) => {
       if (this.closed) return;
-      if (!this.remoteStream.getTracks().some((track) => track.id === event.track.id)) {
+      const negotiatedStream = event.streams[0];
+      if (negotiatedStream) {
+        this.remoteStream = negotiatedStream;
+      } else if (!this.remoteStream.getTracks().some((track) => track.id === event.track.id)) {
         this.remoteStream.addTrack(event.track);
       }
       developmentLog("MEDIA", `remote ${event.track.kind} track received (${event.track.readyState})`);
+      developmentLog("MEDIA", "Remote tracks received:", this.remoteStream.getTracks().map((track) => ({
+        kind: track.kind,
+        enabled: track.enabled,
+        muted: track.muted,
+        readyState: track.readyState,
+      })));
       event.track.onended = () => this.options.onStateChange();
       event.track.onmute = () => this.options.onStateChange();
       event.track.onunmute = () => this.options.onStateChange();
@@ -84,6 +93,8 @@ export class PeerManager {
 
   addLocalStream(stream: MediaStream) {
     if (this.closed) throw new Error("The peer connection is already closed.");
+    const audioTracks = stream.getAudioTracks();
+    if (!audioTracks.some((track) => track.readyState === "live")) throw new Error("A live microphone track is required before creating the peer connection.");
     for (const track of stream.getTracks()) {
       developmentLog("MEDIA", `local ${track.kind} track`, {
         enabled: track.enabled,
@@ -92,7 +103,9 @@ export class PeerManager {
       });
       this.connection.addTrack(track, stream);
     }
-    developmentLog("WEBRTC", "local senders ready", this.connection.getSenders().map((sender) => sender.track?.kind ?? "missing"));
+    const senderKinds = this.connection.getSenders().map((sender) => sender.track?.kind ?? "missing");
+    if (!senderKinds.includes("audio")) throw new Error("The microphone track was not added to the peer connection.");
+    developmentLog("WEBRTC", "local senders ready", senderKinds);
   }
 
   async createOffer(options: { iceRestart?: boolean } = {}) {

@@ -16,11 +16,18 @@ export async function POST(request: NextRequest) {
   const heartbeatUpdate: { last_seen: string; status?: string } = { last_seen: now };
   if (user.status === "offline") heartbeatUpdate.status = "searching";
   await supabase.from("online_users").update(heartbeatUpdate).eq("id", user.id);
+  if (process.env.NODE_ENV === "development") console.info("[MATCH] User added to queue:", { mode: user.communication_mode, previousStatus: user.status });
 
   const { data, error } = await supabase.rpc("propose_real_match", { p_user_id: user.id });
   if (error) return NextResponse.json({ error: "Matching is temporarily unavailable." }, { status: 503 });
   const proposal = Array.isArray(data) ? data[0] : data;
   if (!proposal?.proposal_id) return NextResponse.json({ proposal: null });
+  if (process.env.NODE_ENV === "development") {
+    const { data: partner } = await supabase.from("online_users").select("gender").eq("id", proposal.partner_id).maybeSingle();
+    const preferredOppositeGender = (user.gender === "male" && partner?.gender === "female") || (user.gender === "female" && partner?.gender === "male");
+    console.info("[MATCH] Match found:", { mode: user.communication_mode, preferredOppositeGender });
+    if (!preferredOppositeGender) console.info("[MATCH] Fallback same-gender/any-gender match:", { mode: user.communication_mode });
+  }
 
   return NextResponse.json({
     proposal: {

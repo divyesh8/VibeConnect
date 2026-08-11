@@ -30,6 +30,7 @@ export async function subscribeToRoom(
     onSignal?: (signal: SignalPayload) => void;
     onStatus?: (status: RealtimeSubscriptionStatus, error?: Error) => void;
   },
+  purpose: "signaling" | "chat" = "signaling",
 ) {
   const supabase = getBrowserSupabase();
   if (!supabase) throw new Error("Supabase is not configured");
@@ -39,8 +40,8 @@ export async function subscribeToRoom(
   console.info("[AUTH] session:", session.user.id);
   await supabase.realtime.setAuth(session.access_token);
 
-  const topic = `room:${roomId}`;
-  console.info("[SIGNAL] subscribing:", topic);
+  const topic = purpose === "chat" ? `room:${roomId}:chat` : `room:${roomId}`;
+  console.info(`[${purpose === "chat" ? "CHAT" : "SIGNAL"}] subscribing:`, topic);
   const channel = supabase
     .channel(topic, { config: { private: true, broadcast: { self: false } } })
     .on(

@@ -42,8 +42,8 @@ function mediaErrorMessage(error: unknown, mode: CommunicationMode) {
   if (!(error instanceof DOMException)) return error instanceof Error ? error.message : "We could not start your camera or microphone.";
   if (error.name === "NotAllowedError" || error.name === "SecurityError") {
     return mode === "video"
-      ? "Camera or microphone permission is blocked. Enable both in your browser and try again."
-      : "Microphone permission is blocked. Enable it in your browser and try again.";
+      ? "Camera or microphone permission was denied. Allow both in your browser site settings, then try again."
+      : "Microphone permission was denied. Allow it in your browser site settings, then try again.";
   }
   if (error.name === "NotFoundError") return mode === "video" ? "No working camera or microphone was found." : "No working microphone was found.";
   if (error.name === "NotReadableError") return "Your camera or microphone is already in use by another app.";
@@ -53,19 +53,10 @@ function mediaErrorMessage(error: unknown, mode: CommunicationMode) {
 }
 
 async function requestLocalMedia(mode: CommunicationMode) {
-  const constraints: MediaStreamConstraints = {
-    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-    video: mode === "video" ? { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } } : false,
-  };
-  try {
-    return await navigator.mediaDevices.getUserMedia(constraints);
-  } catch (error) {
-    if (error instanceof DOMException && error.name === "OverconstrainedError" && mode === "video") {
-      console.warn("[MEDIA] requested camera constraints were unavailable; retrying with basic constraints", error);
-      return navigator.mediaDevices.getUserMedia({ audio: true, video: true });
-    }
-    throw error;
-  }
+  return navigator.mediaDevices.getUserMedia({
+    audio: true,
+    video: mode === "video",
+  });
 }
 
 function signalEnvelope(
@@ -328,6 +319,7 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
         return;
       }
       if (signal.kind === "skip" || signal.kind === "call-ended" || signal.kind === "peer-disconnected") {
+        if (process.env.NODE_ENV === "development") console.info("[WEBRTC] Partner disconnected:", signal.kind);
         await cleanupConnection(true);
         setPhase("ended");
         onPeerEndedRef.current?.(signal.kind);
@@ -412,6 +404,10 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
         if (mode === "video" && (!videoTrack || videoTrack.readyState !== "live")) throw new Error("A live camera track was not created.");
 
         console.info("[MEDIA] getUserMedia SUCCESS");
+        if (process.env.NODE_ENV === "development") {
+          console.info("[MEDIA] Local audio tracks:", stream.getAudioTracks().map((track) => ({ enabled: track.enabled, muted: track.muted, readyState: track.readyState })));
+          console.info("[MEDIA] Local video tracks:", stream.getVideoTracks().map((track) => ({ enabled: track.enabled, muted: track.muted, readyState: track.readyState })));
+        }
         console.info("[MEDIA] tracks:", stream.getTracks().map((track) => ({
           id: track.id,
           kind: track.kind,
@@ -479,6 +475,7 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
       const enabledNext = !currentlyEnabled;
       streamRef.current?.getAudioTracks().forEach((track) => { track.enabled = enabledNext; });
       peerRef.current?.toggleMicrophone(enabledNext);
+      if (process.env.NODE_ENV === "development") console.info(`[MEDIA] microphone ${enabledNext ? "unmuted" : "muted"}`);
       return enabledNext;
     });
   }, []);

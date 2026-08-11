@@ -250,11 +250,6 @@ begin
     and candidate_row.status = 'searching'
     and candidate_row.current_room_id is null
     and candidate_row.communication_mode = requester.communication_mode
-    and (
-      (requester.gender = 'male' and candidate_row.gender = 'female')
-      or (requester.gender = 'female' and candidate_row.gender = 'male')
-      or (requester.gender = 'other' and candidate_row.gender = 'other')
-    )
     and candidate_row.last_seen > now() - interval '25 seconds'
     and not exists (
       select 1 from public.banned_users ban
@@ -272,6 +267,11 @@ begin
           or (recent.user1_id = candidate_row.id and recent.user2_id = requester.id))
     )
   order by
+    case
+      when (requester.gender = 'male' and candidate_row.gender = 'female')
+        or (requester.gender = 'female' and candidate_row.gender = 'male') then 0
+      else 1
+    end,
     (
       select count(*)
       from jsonb_array_elements_text(requester.interests) requester_interest(value)

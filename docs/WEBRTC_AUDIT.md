@@ -22,7 +22,8 @@
 - No repeated peer-ready handshake, connection timeout, bounded ICE restart, relay-only test switch, remote autoplay recovery, or packet diagnostics.
 - Signaling payloads did not carry/validate room IDs, timestamps, or nonces.
 - Room rows were active before media connected, room teardown was not room-scoped, and the database lacked an active-membership uniqueness constraint.
-- Gender matching was only ordered as a preference, so an empty queue could silently fall through to an incompatible gender.
+- Voice rooms had no remote media element, so a received audio track could never be heard.
+- Media rooms disabled the text hook to avoid a duplicate private-topic subscription, leaving no side chat during a call.
 - Text history was durable but not loaded when a room was restored.
 - Anti-bot protection was rate-limit-only and the age statement was not an explicit gate.
 
@@ -36,3 +37,6 @@
 - Signaling envelopes are room-bound, sender-bound, nonce-deduplicated, and time-bounded. Old room events cannot affect a new room.
 - TURN configuration is served only to an authorized active room member. Managed short-lived credentials are preferred; server-only static coturn credentials remain an explicit fallback.
 - Optional Cloudflare Turnstile verification and a required 18+ gate were added to session creation.
+- Voice and video now attach remote tracks to an unmuted, full-volume media element and expose a user-gesture playback fallback. Mute changes the outgoing audio track's `enabled` state without renegotiation.
+- Media rooms use a separate authorized `room:<uuid>:chat` topic for room-scoped messages and typing, so chat UI updates do not replace or replay the peer media stream.
+- Matchmaking ranks an eligible opposite-gender candidate first and falls back atomically to another eligible same-mode candidate when none is waiting.

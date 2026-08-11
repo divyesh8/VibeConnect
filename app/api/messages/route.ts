@@ -61,5 +61,6 @@ export async function POST(request: NextRequest) {
   const message = { id: parsed.data.clientId ?? crypto.randomUUID(), room_id: parsed.data.roomId, sender_id: user.id, content, created_at: new Date().toISOString() };
   const { error } = await supabase.from("messages").insert(message);
   if (error) return NextResponse.json({ error: "Message could not be saved." }, { status: 503 });
+  if (process.env.NODE_ENV === "development") console.info("[CHAT] Chat message sent:", { roomScoped: true, length: content.length });
   return NextResponse.json({ message }, { status: 201 });
 }

@@ -11,6 +11,7 @@ import {
   Flag,
   FlipHorizontal2,
   Heart,
+  MessageCircle,
   Mic,
   MicOff,
   MoreHorizontal,
@@ -35,7 +36,7 @@ import { useSessionHeartbeat } from "@/hooks/use-session-heartbeat";
 import { useWebRTC } from "@/hooks/use-webrtc";
 import { getLocalProfile } from "@/lib/session";
 import { cn, initials } from "@/lib/utils";
-import type { AnonymousProfile, CommunicationMode, LiveRoomContext, ReportReason } from "@/types";
+import type { AnonymousProfile, ChatMessage, CommunicationMode, LiveRoomContext, ReportReason } from "@/types";
 
 const reportReasons: { value: ReportReason; label: string }[] = [
   { value: "harassment", label: "Harassment" },
@@ -47,17 +48,28 @@ const reportReasons: { value: ReportReason; label: string }[] = [
   { value: "other", label: "Other" },
 ];
 
-function StreamVideo({ stream, muted, className, onPlaybackBlocked }: { stream: MediaStream | null; muted?: boolean; className?: string; onPlaybackBlocked?: () => void }) {
-  const ref = useRef<HTMLVideoElement>(null);
+function StreamVideo({ stream, muted = false, className, onPlaybackBlocked, videoRef }: { stream: MediaStream | null; muted?: boolean; className?: string; onPlaybackBlocked?: () => void; videoRef?: React.RefObject<HTMLVideoElement | null> }) {
+  const internalRef = useRef<HTMLVideoElement>(null);
+  const playbackBlockedRef = useRef(onPlaybackBlocked);
+  const ref = videoRef ?? internalRef;
+  useEffect(() => {
+    playbackBlockedRef.current = onPlaybackBlocked;
+  }, [onPlaybackBlocked]);
   useEffect(() => {
     const element = ref.current;
     if (!element) return;
     element.srcObject = stream;
+    element.muted = muted;
+    element.defaultMuted = muted;
+    element.volume = muted ? 0 : 1;
     if (stream) void element.play().catch((error) => {
       console.error(`[MEDIA] ${muted ? "local" : "remote"} video play failed`, error);
-      onPlaybackBlocked?.();
+      playbackBlockedRef.current?.();
     });
-  }, [muted, onPlaybackBlocked, stream]);
+    return () => {
+      if (element.srcObject === stream) element.srcObject = null;
+    };
+  }, [muted, ref, stream]);
   // Remote WebRTC streams do not have a separate timed-text caption source.
   // eslint-disable-next-line jsx-a11y/media-has-caption
   return <video ref={ref} autoPlay playsInline muted={muted} className={className} />;
@@ -65,17 +77,34 @@ function StreamVideo({ stream, muted, className, onPlaybackBlocked }: { stream: 
 
 type MediaController = ReturnType<typeof useWebRTC>;
 
-function MediaStage({ profile, partner, mode, media, onNext, onReport, onEnd }: { profile: AnonymousProfile; partner: LiveRoomContext["partner"]; mode: CommunicationMode; media: MediaController; onNext: () => void; onReport: () => void; onEnd: () => void }) {
+function MediaStage({ profile, partner, mode, media, chatOpen, onToggleChat, onNext, onReport, onEnd }: { profile: AnonymousProfile; partner: LiveRoomContext["partner"]; mode: CommunicationMode; media: MediaController; chatOpen: boolean; onToggleChat: () => void; onNext: () => void; onReport: () => void; onEnd: () => void }) {
   const [playbackBlocked, setPlaybackBlocked] = useState(false);
+  const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const connected = media.phase === "connected";
+  const remoteAudioLive = media.remoteStream?.getAudioTracks().some((track) => track.readyState === "live") ?? false;
   const diagnosticsVisible = process.env.NODE_ENV === "development" || process.env.NEXT_PUBLIC_WEBRTC_DIAGNOSTICS === "true";
+
+  async function enablePartnerAudio() {
+    const remoteVideo = remoteVideoRef.current;
+    if (!remoteVideo) return;
+    remoteVideo.muted = false;
+    remoteVideo.defaultMuted = false;
+    remoteVideo.volume = 1;
+    try {
+      await remoteVideo.play();
+      setPlaybackBlocked(false);
+    } catch (error) {
+      console.error("[MEDIA] partner audio playback is still blocked", error);
+      setPlaybackBlocked(true);
+    }
+  }
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[24px] border border-white/[0.08] bg-[#0a0910]">
       {mode === "video" ? (
         <div className="relative grid min-h-[430px] flex-1 gap-2 p-2 md:grid-cols-2">
           <div className="relative overflow-hidden rounded-[19px] border border-white/[0.08] bg-gradient-to-br from-[#203d40] to-[#101416]">
-            {media.remoteStream ? <StreamVideo stream={media.remoteStream} className="absolute inset-0 size-full object-cover" onPlaybackBlocked={() => setPlaybackBlocked(true)} /> : <><div className="absolute left-1/2 top-1/2 size-72 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#78f7df]/10 blur-[80px]" /><div className="absolute left-1/2 top-1/2 grid size-28 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-[38px] bg-gradient-to-br from-[#78f7df] to-[#587dff] font-display text-3xl font-black text-[#071313] shadow-2xl">{initials(partner.username)}</div><p className="absolute bottom-16 left-1/2 -translate-x-1/2 text-[10px] font-bold text-white/42">{media.statusMessage}</p></>}
+            {media.remoteStream ? <StreamVideo stream={media.remoteStream} muted={false} videoRef={remoteVideoRef} className="absolute inset-0 size-full object-cover" onPlaybackBlocked={() => setPlaybackBlocked(true)} /> : <><div className="absolute left-1/2 top-1/2 size-72 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#78f7df]/10 blur-[80px]" /><div className="absolute left-1/2 top-1/2 grid size-28 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-[38px] bg-gradient-to-br from-[#78f7df] to-[#587dff] font-display text-3xl font-black text-[#071313] shadow-2xl">{initials(partner.username)}</div><p className="absolute bottom-16 left-1/2 -translate-x-1/2 text-[10px] font-bold text-white/42">{media.statusMessage}</p></>}
             <div className="absolute bottom-4 left-4 flex items-center gap-2 rounded-full bg-black/35 px-3 py-1.5 text-xs font-bold backdrop-blur-md"><span className="status-dot !size-1.5" /> {partner.username}</div>
             <div className="absolute right-4 top-4 flex h-8 items-end gap-1 rounded-full bg-black/30 px-3 py-2 backdrop-blur-md">
               {[1, 2, 3, 4].map((bar) => <span key={bar} className="signal-bar !w-[3px]" />)}
@@ -96,6 +125,7 @@ function MediaStage({ profile, partner, mode, media, onNext, onReport, onEnd }: 
         </div>
       ) : (
         <div className="relative flex min-h-[430px] flex-1 flex-col items-center justify-center overflow-hidden p-8 text-center">
+          {media.remoteStream && <StreamVideo stream={media.remoteStream} muted={false} videoRef={remoteVideoRef} className="sr-only" onPlaybackBlocked={() => setPlaybackBlocked(true)} />}
           <div className="absolute left-1/2 top-1/2 size-96 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#9d78ff]/10 blur-[100px]" />
           <motion.div animate={{ scale: connected ? [1, 1.05, 1] : 1 }} transition={{ duration: 2, repeat: Infinity }} className="relative">
             <div className="absolute -inset-8 rounded-[58px] border border-[#78f7df]/10" />
@@ -134,9 +164,11 @@ function MediaStage({ profile, partner, mode, media, onNext, onReport, onEnd }: 
             <Button variant="danger" size="icon" onClick={onEnd} aria-label="End call"><PhoneOff className="size-4" /></Button>
           </>
         )}
+        <Button variant={chatOpen ? "secondary" : "ghost"} onClick={onToggleChat} aria-label="Toggle text chat"><MessageCircle className="size-4" /> Chat</Button>
         <p className={cn("w-full pt-1 text-center text-[10px] font-bold", connected ? "text-[#78f7df]" : "text-white/42")}>{media.statusMessage}</p>
+        {media.localStream && <p className="w-full text-center text-[9px] font-semibold text-white/30">Microphone {media.micEnabled ? "on" : "muted"} · Partner audio {remoteAudioLive ? "available" : "waiting"}</p>}
         {media.error && <div className="flex w-full flex-wrap items-center justify-center gap-2"><p className="text-center text-[10px] font-bold text-rose-300">{media.error}</p>{media.localStream && <Button variant="secondary" size="sm" onClick={media.retryConnection}>Retry</Button>}</div>}
-        {playbackBlocked && <button onClick={() => { setPlaybackBlocked(false); document.querySelector<HTMLVideoElement>("video:not([muted])")?.play().catch(() => setPlaybackBlocked(true)); }} className="w-full text-center text-xs font-bold text-amber-200">Tap to start audio</button>}
+        {playbackBlocked && <button onClick={() => void enablePartnerAudio()} className="w-full text-center text-xs font-bold text-amber-200">Enable partner audio</button>}
       </div>
       {diagnosticsVisible && (
         <details className="border-t border-white/[0.07] bg-black/35 px-4 py-2 text-[9px] text-white/45">
@@ -154,6 +186,59 @@ function MediaStage({ profile, partner, mode, media, onNext, onReport, onEnd }: 
   );
 }
 
+function RoomChatPanel({ profile, partner, messages, partnerTyping, draft, compact = false, messagesEndRef, onDraftChange, onSend, onTyping }: { profile: AnonymousProfile; partner: LiveRoomContext["partner"]; messages: ChatMessage[]; partnerTyping: boolean; draft: string; compact?: boolean; messagesEndRef: React.RefObject<HTMLDivElement | null>; onDraftChange: (value: string) => void; onSend: () => void; onTyping: () => void }) {
+  return (
+    <div className={cn("relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[23px] border border-white/[0.07] bg-black/20", compact && "h-[min(42dvh,430px)] xl:h-auto")}>
+      {compact && (
+        <div className="flex shrink-0 items-center justify-between border-b border-white/[0.07] px-4 py-3">
+          <div className="flex items-center gap-2 text-xs font-extrabold"><MessageCircle className="size-4 text-[#78f7df]" /> Live chat</div>
+          <span className="text-[9px] font-semibold text-white/25">This room only</span>
+        </div>
+      )}
+      <div className={cn("flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-5", !compact && "sm:px-7 sm:py-7")}>
+        <div className="my-2 flex items-center gap-3 text-[9px] font-black uppercase tracking-[.16em] text-white/20"><span className="h-px flex-1 bg-white/[0.06]" />You matched just now<span className="h-px flex-1 bg-white/[0.06]" /></div>
+        {messages.map((message) => {
+          const mine = message.senderId === profile.id;
+          return (
+            <motion.div key={message.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className={cn("flex max-w-[86%] gap-2.5", !compact && "sm:max-w-[72%]", mine ? "ml-auto flex-row-reverse" : "")}>
+              {!mine && <div className="profile-gradient-2 mt-1 grid size-7 shrink-0 place-items-center rounded-[10px] text-[9px] font-black text-[#0b2823]">{initials(partner.username)}</div>}
+              <div>
+                <div className={cn("whitespace-pre-wrap break-words rounded-[19px] px-4 py-3 text-[13px] leading-5", mine ? "rounded-tr-[6px] bg-white text-[#131018]" : "rounded-tl-[6px] border border-white/[0.08] bg-white/[0.065] text-white/72")}>
+                  {message.content}
+                </div>
+                <div className={cn("mt-1.5 flex items-center gap-1.5 px-1 text-[9px] text-white/20", mine && "justify-end")}>
+                  {new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  {mine && <CheckCheck className={cn("size-3", message.status === "failed" ? "text-rose-300" : "text-[#78f7df]/70")} />}
+                </div>
+              </div>
+            </motion.div>
+          );
+        })}
+        {partnerTyping && <div className="flex items-center gap-2 text-[10px] font-bold text-white/27"><div className="profile-gradient-2 grid size-7 place-items-center rounded-[10px] text-[9px] font-black text-[#0b2823]">{initials(partner.username)}</div><span className="rounded-full bg-white/[0.06] px-3 py-2">{partner.username} is typing<span className="ml-1 animate-pulse">...</span></span></div>}
+        <div ref={messagesEndRef} />
+      </div>
+
+      <form onSubmit={(event) => { event.preventDefault(); onSend(); }} className="shrink-0 border-t border-white/[0.07] bg-[#0d0b13]/90 p-3 sm:p-4">
+        <div className="flex items-end gap-2 rounded-[20px] border border-white/[0.09] bg-white/[0.04] p-2 pl-4 focus-within:border-[#78f7df]/35 focus-within:ring-4 focus-within:ring-[#78f7df]/[0.05]">
+          <textarea
+            value={draft}
+            onChange={(event) => { onDraftChange(event.target.value.slice(0, 1000)); onTyping(); }}
+            onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); onSend(); } }}
+            rows={1}
+            maxLength={1000}
+            placeholder="Say something nice..."
+            className="max-h-28 min-h-9 flex-1 resize-none bg-transparent py-2 text-sm text-white outline-none placeholder:text-white/20"
+            aria-label={`Message ${partner.username}`}
+          />
+          <button type="button" onClick={() => onDraftChange(`${draft} ✨`.slice(0, 1000))} className="grid size-10 shrink-0 place-items-center rounded-full text-white/30 transition hover:bg-white/[0.06] hover:text-white" aria-label="Add emoji"><SmilePlus className="size-[18px]" /></button>
+          <Button type="submit" size="icon" disabled={!draft.trim()} aria-label="Send message"><Send className="size-4" /></Button>
+        </div>
+        <p className="mt-2 px-2 text-[9px] text-white/18">Enter to send · Shift + Enter for a new line · {draft.length}/1000</p>
+      </form>
+    </div>
+  );
+}
+
 export function ChatRoom({ roomId }: { roomId: string }) {
   const router = useRouter();
   const [profile, setProfile] = useState<AnonymousProfile | null>(null);
@@ -162,7 +247,9 @@ export function ChatRoom({ roomId }: { roomId: string }) {
   const [draft, setDraft] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
+  const [mediaChatOpen, setMediaChatOpen] = useState(false);
   const [ended, setEnded] = useState(false);
+  const [endedByPartner, setEndedByPartner] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const media = useWebRTC({
@@ -171,10 +258,17 @@ export function ChatRoom({ roomId }: { roomId: string }) {
     roomId,
     userId: profile?.id ?? "",
     initiator: Boolean(liveRoom?.initiator),
-    onPeerEnded: () => setEnded(true),
+    onPeerEnded: () => {
+      setEndedByPartner(true);
+      setEnded(true);
+    },
   });
-  const { messages, partnerTyping, sendMessage, announceTyping } = useRoomChat(roomId, liveRoom?.mode === "text" ? profile : null);
-  useSessionHeartbeat(Boolean(liveRoom && !ended), () => setEnded(true));
+  const { messages, partnerTyping, sendMessage, announceTyping } = useRoomChat(roomId, !ended && liveRoom ? profile : null);
+  useSessionHeartbeat(Boolean(liveRoom && !ended), () => {
+    if (process.env.NODE_ENV === "development") console.info("[ROOM] Partner disconnected: heartbeat detected ended room");
+    setEndedByPartner(true);
+    setEnded(true);
+  });
 
   useEffect(() => {
     const stored = getLocalProfile();
@@ -201,8 +295,7 @@ export function ChatRoom({ roomId }: { roomId: string }) {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, partnerTyping]);
 
-  async function submitMessage(event: React.FormEvent) {
-    event.preventDefault();
+  async function sendDraft() {
     if (!draft.trim()) return;
     const content = draft;
     setDraft("");
@@ -210,9 +303,17 @@ export function ChatRoom({ roomId }: { roomId: string }) {
   }
 
   async function endConversation(reason: "skip" | "call-ended" = "call-ended") {
+    setEndedByPartner(false);
     setEnded(true);
     if (liveRoom?.mode !== "text") await media.endConnection(reason);
     await fetch("/api/rooms/end", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ roomId, reason: reason === "skip" ? "skipped" : "ended" }) }).catch(() => undefined);
+  }
+
+  async function nextConversation() {
+    setDraft("");
+    if (liveRoom?.mode !== "text") await media.endConnection("skip");
+    await fetch("/api/rooms/end", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ roomId, reason: "skipped" }) }).catch(() => undefined);
+    router.replace("/matching");
   }
 
   async function submitReport(reason: ReportReason) {
@@ -273,7 +374,7 @@ export function ChatRoom({ roomId }: { roomId: string }) {
               )}
             </AnimatePresence>
           </div>
-          <Button variant="secondary" onClick={() => void endConversation("skip")} className="hidden sm:flex"><RotateCcw className="size-4" /> Next</Button>
+          <Button variant="secondary" onClick={() => void nextConversation()} className="hidden sm:flex"><RotateCcw className="size-4" /> Next</Button>
           <Button variant="danger" onClick={() => void endConversation()} className="hidden sm:flex"><PhoneOff className="size-4" /> End</Button>
           <Button variant="danger" size="icon" onClick={() => void endConversation()} className="sm:hidden" aria-label="End conversation"><PhoneOff className="size-4" /></Button>
         </div>
@@ -290,49 +391,16 @@ export function ChatRoom({ roomId }: { roomId: string }) {
           </div>
 
           {isText ? (
-            <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[23px] border border-white/[0.07] bg-black/20">
-              <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-5 sm:px-7 sm:py-7">
-                <div className="my-2 flex items-center gap-3 text-[9px] font-black uppercase tracking-[.16em] text-white/20"><span className="h-px flex-1 bg-white/[0.06]" />You matched just now<span className="h-px flex-1 bg-white/[0.06]" /></div>
-                {messages.map((message) => {
-                  const mine = message.senderId === profile.id;
-                  return (
-                    <motion.div key={message.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className={cn("flex max-w-[86%] gap-2.5 sm:max-w-[72%]", mine ? "ml-auto flex-row-reverse" : "")}>
-                      {!mine && <div className="profile-gradient-2 mt-1 grid size-7 shrink-0 place-items-center rounded-[10px] text-[9px] font-black text-[#0b2823]">{initials(liveRoom.partner.username)}</div>}
-                      <div>
-                        <div className={cn("rounded-[19px] px-4 py-3 text-[13px] leading-5", mine ? "rounded-tr-[6px] bg-white text-[#131018]" : "rounded-tl-[6px] border border-white/[0.08] bg-white/[0.065] text-white/72")}>
-                          {message.content}
-                        </div>
-                        <div className={cn("mt-1.5 flex items-center gap-1.5 px-1 text-[9px] text-white/20", mine && "justify-end")}>
-                          {new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                          {mine && <CheckCheck className={cn("size-3", message.status === "failed" ? "text-rose-300" : "text-[#78f7df]/70")} />}
-                        </div>
-                      </div>
-                    </motion.div>
-                  );
-                })}
-                {partnerTyping && <div className="flex items-center gap-2 text-[10px] font-bold text-white/27"><div className="profile-gradient-2 grid size-7 place-items-center rounded-[10px] text-[9px] font-black text-[#0b2823]">{initials(liveRoom.partner.username)}</div><span className="rounded-full bg-white/[0.06] px-3 py-2">{liveRoom.partner.username} is typing<span className="ml-1 animate-pulse">...</span></span></div>}
-                <div ref={messagesEndRef} />
-              </div>
-
-              <form onSubmit={submitMessage} className="shrink-0 border-t border-white/[0.07] bg-[#0d0b13]/90 p-3 sm:p-4">
-                <div className="flex items-end gap-2 rounded-[20px] border border-white/[0.09] bg-white/[0.04] p-2 pl-4 focus-within:border-[#78f7df]/35 focus-within:ring-4 focus-within:ring-[#78f7df]/[0.05]">
-                  <textarea
-                    value={draft}
-                    onChange={(event) => { setDraft(event.target.value.slice(0, 1000)); announceTyping(); }}
-                    onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submitMessage(event); } }}
-                    rows={1}
-                    placeholder="Say something nice..."
-                    className="max-h-28 min-h-9 flex-1 resize-none bg-transparent py-2 text-sm text-white outline-none placeholder:text-white/20"
-                    aria-label={`Message ${liveRoom.partner.username}`}
-                  />
-                  <button type="button" onClick={() => setDraft((value) => `${value} ✨`)} className="grid size-10 shrink-0 place-items-center rounded-full text-white/30 transition hover:bg-white/[0.06] hover:text-white" aria-label="Add emoji"><SmilePlus className="size-[18px]" /></button>
-                  <Button type="submit" size="icon" disabled={!draft.trim()} aria-label="Send message"><Send className="size-4" /></Button>
-                </div>
-                <p className="mt-2 px-2 text-[9px] text-white/18">Enter to send · Shift + Enter for a new line</p>
-              </form>
-            </div>
+            <RoomChatPanel profile={profile} partner={liveRoom.partner} messages={messages} partnerTyping={partnerTyping} draft={draft} messagesEndRef={messagesEndRef} onDraftChange={setDraft} onSend={() => void sendDraft()} onTyping={announceTyping} />
           ) : (
-            <MediaStage profile={profile} partner={liveRoom.partner} mode={liveRoom.mode} media={media} onNext={() => void endConversation("skip")} onReport={() => setReportOpen(true)} onEnd={() => void endConversation()} />
+            <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto xl:flex-row xl:overflow-hidden">
+              <div className="flex min-h-[520px] shrink-0 xl:min-h-0 xl:flex-1">
+                <MediaStage profile={profile} partner={liveRoom.partner} mode={liveRoom.mode} media={media} chatOpen={mediaChatOpen} onToggleChat={() => setMediaChatOpen((value) => !value)} onNext={() => void nextConversation()} onReport={() => setReportOpen(true)} onEnd={() => void endConversation()} />
+              </div>
+              <aside className={cn("min-h-[320px] shrink-0 xl:flex xl:min-h-0 xl:w-[350px]", mediaChatOpen ? "flex" : "hidden")}>
+                <RoomChatPanel compact profile={profile} partner={liveRoom.partner} messages={messages} partnerTyping={partnerTyping} draft={draft} messagesEndRef={messagesEndRef} onDraftChange={setDraft} onSend={() => void sendDraft()} onTyping={announceTyping} />
+              </aside>
+            </div>
           )}
         </GlassCard>
 
@@ -386,9 +454,9 @@ export function ChatRoom({ roomId }: { roomId: string }) {
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[90] grid place-items-center bg-[#08070d]/88 p-4 backdrop-blur-xl">
             <motion.div initial={{ y: 18, opacity: 0, scale: 0.96 }} animate={{ y: 0, opacity: 1, scale: 1 }} className="w-full max-w-lg text-center">
               <div className="mx-auto grid size-20 place-items-center rounded-[26px] border border-white/10 bg-white/[0.06]"><PhoneOff className="size-7 text-white/60" /></div>
-              <div className="eyebrow mt-7"><span className="size-1.5 rounded-full bg-white/25" /> Conversation ended</div>
-              <h2 className="mt-4 font-display text-4xl font-semibold tracking-[-.055em]">Good chat?</h2>
-              <p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-white/38">Your chat history is saved securely. Voice and video were never stored.</p>
+              <div className="eyebrow mt-7"><span className="size-1.5 rounded-full bg-white/25" /> {endedByPartner ? "Partner left" : "Conversation ended"}</div>
+              <h2 className="mt-4 font-display text-4xl font-semibold tracking-[-.055em]">{endedByPartner ? "Stranger disconnected" : "Good chat?"}</h2>
+              <p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-white/38">{endedByPartner ? "The other person left the room. You can safely find someone new." : "Your chat history is saved securely. Voice and video were never stored."}</p>
               <div className="mt-7 flex justify-center gap-2">
                 {['😕', '🙂', '✨'].map((emoji) => <button key={emoji} className="glass-subtle grid size-12 place-items-center rounded-2xl text-xl transition hover:-translate-y-1 hover:bg-white/[0.08]">{emoji}</button>)}
               </div>

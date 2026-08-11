@@ -37,7 +37,7 @@ export function useRoomChat(roomId: string, profile: AnonymousProfile | null) {
       onTyping: ({ senderId, typing }) => {
         if (senderId !== profile.id) setPartnerTyping(typing);
       },
-    }).then((channel) => {
+    }, "chat").then((channel) => {
       if (!active) void leaveRoomChannel(channel);
       else channelRef.current = channel;
     }).catch(() => {
@@ -69,6 +69,7 @@ export function useRoomChat(roomId: string, profile: AnonymousProfile | null) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ roomId, content: optimistic.content, clientId: optimistic.id }),
       });
+      if (process.env.NODE_ENV === "development" && response.ok) console.info("[CHAT] message sent", { roomScoped: true });
       setMessages((current) => current.map((message) => message.id === optimistic.id ? { ...message, status: response.ok ? "sent" : "failed" } : message));
     } catch {
       setMessages((current) => current.map((message) => message.id === optimistic.id ? { ...message, status: "failed" } : message));

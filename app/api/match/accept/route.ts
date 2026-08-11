@@ -15,5 +15,6 @@ export async function POST(request: NextRequest) {
   const { data, error } = await supabase.rpc("accept_real_match", { p_user_id: user.id, p_proposal_id: parsed.data.proposalId });
   if (error) return NextResponse.json({ error: "Could not accept this connection." }, { status: 503 });
   const result = Array.isArray(data) ? data[0] : data;
+  if (process.env.NODE_ENV === "development" && result?.proposal_status === "matched") console.info("[MATCH] Room created:", { created: Boolean(result.room_id) });
   return NextResponse.json({ status: result?.proposal_status ?? "invalid", roomId: result?.room_id ?? null });
 }
