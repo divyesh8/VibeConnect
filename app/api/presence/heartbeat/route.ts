@@ -22,7 +22,7 @@ export async function POST(request: NextRequest) {
     const { data: activeRoom, error: roomError } = await supabase
       .from("chat_rooms")
       .select("id")
-      .eq("status", "active")
+      .in("status", ["connecting", "active"])
       .or(`user1_id.eq.${user.id},user2_id.eq.${user.id}`)
       .limit(1)
       .maybeSingle();

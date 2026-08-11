@@ -5,6 +5,36 @@ import { cleanText, messageSchema } from "@/lib/validation";
 import { moderateText } from "@/services/moderation";
 import { createServerSupabase } from "@/services/supabase";
 
+export async function GET(request: NextRequest) {
+  const user = await getSessionUser(request);
+  if (!user) return NextResponse.json({ error: "Session expired." }, { status: 401 });
+  const roomId = request.nextUrl.searchParams.get("roomId");
+  if (!roomId || !/^[0-9a-f-]{36}$/i.test(roomId)) return NextResponse.json({ error: "Invalid room." }, { status: 400 });
+  const supabase = createServerSupabase();
+  if (!supabase) return NextResponse.json({ error: "Live messaging is unavailable." }, { status: 503 });
+  const { data: membership } = await supabase.from("room_members").select("room_id").eq("room_id", roomId).eq("user_id", user.id).maybeSingle();
+  if (!membership) return NextResponse.json({ error: "You are not a member of this room." }, { status: 403 });
+  const { data, error } = await supabase
+    .from("messages")
+    .select("id, room_id, sender_id, content, created_at, seen_at")
+    .eq("room_id", roomId)
+    .order("created_at", { ascending: true })
+    .limit(100);
+  if (error) return NextResponse.json({ error: "Message history could not be loaded." }, { status: 503 });
+  return NextResponse.json({
+    messages: (data ?? []).map((message) => ({
+      id: message.id,
+      roomId: message.room_id,
+      senderId: message.sender_id,
+      senderName: "",
+      content: message.content,
+      createdAt: message.created_at,
+      seenAt: message.seen_at,
+      status: "sent",
+    })),
+  });
+}
+
 export async function POST(request: NextRequest) {
   const user = await getSessionUser(request);
   if (!user) return NextResponse.json({ error: "Session expired." }, { status: 401 });
@@ -15,7 +45,7 @@ export async function POST(request: NextRequest) {
   const parsed = messageSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "Invalid message." }, { status: 400 });
   const content = cleanText(parsed.data.content);
-  const { data: membership } = await supabase.from("room_members").select("room_id").eq("room_id", parsed.data.roomId).eq("user_id", user.id).maybeSingle();
+  const { data: membership } = await supabase.from("room_members").select("room_id").eq("room_id", parsed.data.roomId).eq("user_id", user.id).eq("active", true).maybeSingle();
   if (!membership) return NextResponse.json({ error: "You are not a member of this room." }, { status: 403 });
   const moderation = await moderateText(content);
   if (moderation.flagged) {

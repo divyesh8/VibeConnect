@@ -36,6 +36,7 @@ export function SetupForm() {
   const [gender, setGender] = useState<Gender | null>(null);
   const [mode, setMode] = useState<CommunicationMode>("text");
   const [interests, setInterests] = useState<string[]>([]);
+  const [ageConfirmed, setAgeConfirmed] = useState(false);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -63,6 +64,10 @@ export function SetupForm() {
     }
     if (!gender) {
       setError("Choose the option that feels right for you.");
+      return;
+    }
+    if (!ageConfirmed) {
+      setError("You must confirm that you are 18 or older to continue.");
       return;
     }
 
@@ -152,7 +157,7 @@ export function SetupForm() {
 
               <fieldset>
                 <legend className="mb-2.5 text-xs font-extrabold text-white/70">Gender</legend>
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <div className="grid grid-cols-3 gap-2">
                   {GENDERS.map((item) => (
                     <button
                       key={item.value}
@@ -171,6 +176,11 @@ export function SetupForm() {
                   ))}
                 </div>
               </fieldset>
+
+              <div className="flex items-start gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-4">
+                <input id="age-confirmation" type="checkbox" checked={ageConfirmed} onChange={(event) => setAgeConfirmed(event.target.checked)} className="mt-0.5 size-4 accent-[#78f7df]" />
+                <div><label htmlFor="age-confirmation" className="cursor-pointer text-xs font-extrabold text-white/72">I am 18 or older</label><span className="mt-1 block text-[10px] leading-4 text-white/32">Stranger conversations can be unpredictable. Minors may not use this service.</span></div>
+              </div>
 
               <fieldset>
                 <legend className="mb-2.5 text-xs font-extrabold text-white/70">How do you want to connect?</legend>

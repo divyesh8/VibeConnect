@@ -74,7 +74,6 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
   const disconnectTimerRef = useRef<number | null>(null);
   const statsTimerRef = useRef<number | null>(null);
   const onPeerEndedRef = useRef(onPeerEnded);
-  const handleSignalRef = useRef<(signal: SignalPayload) => Promise<void>>(async () => undefined);
 
   useEffect(() => {
     phaseRef.current = phase;
@@ -234,7 +233,7 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
     }
   }, [clearTimer]);
 
-  handleSignalRef.current = async (signal) => {
+  const handleSignal = useCallback(async (signal: SignalPayload) => {
     if (signal.roomId !== roomId || signal.senderId === userId) return;
     if (Math.abs(Date.now() - signal.timestamp) > 2 * 60_000 || seenNoncesRef.current.has(signal.nonce)) return;
     seenNoncesRef.current.add(signal.nonce);
@@ -284,7 +283,7 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
       setError("The secure signaling exchange failed. Please retry the call.");
       setPhase("failed");
     }
-  };
+  }, [cleanupConnection, initiator, maybeCreateOffer, roomId, startConnectionTimeout, userId]);
 
   useEffect(() => {
     if (!enabled || mode === "text" || !roomId || !userId) {
@@ -294,7 +293,7 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
     let active = true;
     queueMicrotask(() => setPhase("subscribing"));
     const subscription = subscribeToRoom(roomId, {
-      onSignal: (signal) => void handleSignalRef.current(signal),
+      onSignal: (signal) => void handleSignal(signal),
     });
     signalingPromiseRef.current = subscription;
     void subscription
@@ -319,7 +318,7 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
       active = false;
       void cleanupConnection(true, false);
     };
-  }, [cleanupConnection, enabled, mode, roomId, send, userId]);
+  }, [cleanupConnection, enabled, handleSignal, mode, roomId, send, userId]);
 
   const startMedia = useCallback(async () => {
     if (!enabled || mode === "text" || mediaReadyRef.current) return;

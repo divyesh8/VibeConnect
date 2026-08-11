@@ -43,28 +43,36 @@ const reportReasons: { value: ReportReason; label: string }[] = [
   { value: "sexual_content", label: "Sexual content" },
   { value: "spam", label: "Spam" },
   { value: "threats", label: "Threats" },
+  { value: "underage_concern", label: "Underage concern" },
+  { value: "other", label: "Other" },
 ];
 
-function StreamVideo({ stream, muted, className }: { stream: MediaStream | null; muted?: boolean; className?: string }) {
+function StreamVideo({ stream, muted, className, onPlaybackBlocked }: { stream: MediaStream | null; muted?: boolean; className?: string; onPlaybackBlocked?: () => void }) {
   const ref = useRef<HTMLVideoElement>(null);
   useEffect(() => {
-    if (ref.current) ref.current.srcObject = stream;
-  }, [stream]);
+    const element = ref.current;
+    if (!element) return;
+    element.srcObject = stream;
+    if (stream) void element.play().catch(() => onPlaybackBlocked?.());
+  }, [onPlaybackBlocked, stream]);
   // Remote WebRTC streams do not have a separate timed-text caption source.
   // eslint-disable-next-line jsx-a11y/media-has-caption
   return <video ref={ref} autoPlay playsInline muted={muted} className={className} />;
 }
 
-function MediaStage({ profile, partner, mode, roomId, initiator }: { profile: AnonymousProfile; partner: LiveRoomContext["partner"]; mode: CommunicationMode; roomId: string; initiator: boolean }) {
-  const media = useWebRTC(mode, roomId, profile.id, initiator);
-  const connected = Boolean(media.localStream);
+type MediaController = ReturnType<typeof useWebRTC>;
+
+function MediaStage({ profile, partner, mode, media, onNext, onReport, onEnd }: { profile: AnonymousProfile; partner: LiveRoomContext["partner"]; mode: CommunicationMode; media: MediaController; onNext: () => void; onReport: () => void; onEnd: () => void }) {
+  const [playbackBlocked, setPlaybackBlocked] = useState(false);
+  const connected = media.phase === "connected";
+  const diagnosticsVisible = process.env.NODE_ENV === "development" || process.env.NEXT_PUBLIC_WEBRTC_DIAGNOSTICS === "true";
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[24px] border border-white/[0.08] bg-[#0a0910]">
       {mode === "video" ? (
         <div className="relative grid min-h-[430px] flex-1 gap-2 p-2 md:grid-cols-2">
           <div className="relative overflow-hidden rounded-[19px] border border-white/[0.08] bg-gradient-to-br from-[#203d40] to-[#101416]">
-            {media.remoteStream ? <StreamVideo stream={media.remoteStream} className="absolute inset-0 size-full object-cover" /> : <><div className="absolute left-1/2 top-1/2 size-72 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#78f7df]/10 blur-[80px]" /><div className="absolute left-1/2 top-1/2 grid size-28 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-[38px] bg-gradient-to-br from-[#78f7df] to-[#587dff] font-display text-3xl font-black text-[#071313] shadow-2xl">{initials(partner.username)}</div></>}
+            {media.remoteStream ? <StreamVideo stream={media.remoteStream} className="absolute inset-0 size-full object-cover" onPlaybackBlocked={() => setPlaybackBlocked(true)} /> : <><div className="absolute left-1/2 top-1/2 size-72 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#78f7df]/10 blur-[80px]" /><div className="absolute left-1/2 top-1/2 grid size-28 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-[38px] bg-gradient-to-br from-[#78f7df] to-[#587dff] font-display text-3xl font-black text-[#071313] shadow-2xl">{initials(partner.username)}</div><p className="absolute bottom-16 left-1/2 -translate-x-1/2 text-[10px] font-bold text-white/42">{media.statusMessage}</p></>}
             <div className="absolute bottom-4 left-4 flex items-center gap-2 rounded-full bg-black/35 px-3 py-1.5 text-xs font-bold backdrop-blur-md"><span className="status-dot !size-1.5" /> {partner.username}</div>
             <div className="absolute right-4 top-4 flex h-8 items-end gap-1 rounded-full bg-black/30 px-3 py-2 backdrop-blur-md">
               {[1, 2, 3, 4].map((bar) => <span key={bar} className="signal-bar !w-[3px]" />)}
@@ -100,7 +108,7 @@ function MediaStage({ profile, partner, mode, roomId, initiator }: { profile: An
       )}
 
       <div className="flex flex-wrap items-center justify-center gap-2 border-t border-white/[0.08] bg-black/20 p-3 sm:p-4">
-        {!connected ? (
+        {!media.localStream ? (
           <Button onClick={media.startMedia} className="min-w-52">
             {mode === "video" ? <Camera className="size-4" /> : <Mic className="size-4" />}
             Enable {mode === "video" ? "camera & mic" : "microphone"}
@@ -118,10 +126,24 @@ function MediaStage({ profile, partner, mode, roomId, initiator }: { profile: An
                 <Button variant="secondary" size="icon" onClick={media.switchCamera} aria-label="Switch camera"><FlipHorizontal2 className="size-4" /></Button>
               </>
             )}
+            <Button variant="secondary" onClick={onNext}><RotateCcw className="size-4" /> Next</Button>
+            <Button variant="secondary" size="icon" onClick={onReport} aria-label="Report stranger"><Flag className="size-4" /></Button>
+            <Button variant="danger" size="icon" onClick={onEnd} aria-label="End call"><PhoneOff className="size-4" /></Button>
           </>
         )}
-        {media.permissionError && <p className="w-full pt-1 text-center text-[10px] font-bold text-rose-300">{media.permissionError}</p>}
+        <p className={cn("w-full pt-1 text-center text-[10px] font-bold", connected ? "text-[#78f7df]" : "text-white/42")}>{media.statusMessage}</p>
+        {media.error && <div className="flex w-full flex-wrap items-center justify-center gap-2"><p className="text-center text-[10px] font-bold text-rose-300">{media.error}</p>{media.localStream && <Button variant="secondary" size="sm" onClick={media.retryConnection}>Retry</Button>}</div>}
+        {playbackBlocked && <button onClick={() => { setPlaybackBlocked(false); document.querySelector<HTMLVideoElement>("video:not([muted])")?.play().catch(() => setPlaybackBlocked(true)); }} className="w-full text-center text-xs font-bold text-amber-200">Tap to start audio</button>}
       </div>
+      {diagnosticsVisible && media.diagnostics && (
+        <details className="border-t border-white/[0.07] bg-black/35 px-4 py-2 text-[9px] text-white/45">
+          <summary className="cursor-pointer font-bold text-white/55">WebRTC diagnostics · {media.diagnostics.candidateType}</summary>
+          <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-4">
+            <span>Role: {media.diagnostics.signalingState === "unavailable" ? "—" : "live"}</span><span>Signal: {media.diagnostics.signalingState}</span><span>ICE: {media.diagnostics.iceConnectionState}</span><span>Peer: {media.diagnostics.connectionState}</span>
+            <span>Local A/V: {media.diagnostics.localAudio}/{media.diagnostics.localVideo}</span><span>Remote A/V: {media.diagnostics.remoteAudio}/{media.diagnostics.remoteVideo}</span><span>Sent: {media.diagnostics.packetsSent} pkts</span><span>Received: {media.diagnostics.packetsReceived} pkts</span>
+          </div>
+        </details>
+      )}
     </div>
   );
 }
@@ -137,7 +159,15 @@ export function ChatRoom({ roomId }: { roomId: string }) {
   const [ended, setEnded] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const { messages, partnerTyping, sendMessage, announceTyping } = useRoomChat(roomId, liveRoom ? profile : null);
+  const media = useWebRTC({
+    enabled: Boolean(profile && liveRoom && liveRoom.mode !== "text" && !ended),
+    mode: liveRoom?.mode ?? "text",
+    roomId,
+    userId: profile?.id ?? "",
+    initiator: Boolean(liveRoom?.initiator),
+    onPeerEnded: () => setEnded(true),
+  });
+  const { messages, partnerTyping, sendMessage, announceTyping } = useRoomChat(roomId, liveRoom?.mode === "text" ? profile : null);
   useSessionHeartbeat(Boolean(liveRoom && !ended), () => setEnded(true));
 
   useEffect(() => {
@@ -152,7 +182,7 @@ export function ChatRoom({ roomId }: { roomId: string }) {
       try {
         const response = await fetch(`/api/rooms/${encodeURIComponent(roomId)}`, { cache: "no-store" });
         const data = await response.json() as LiveRoomContext & { error?: string };
-        if (!response.ok || data.status !== "active" || !data.partner) throw new Error(data.error ?? "This room is no longer active.");
+        if (!response.ok || !["connecting", "active"].includes(data.status) || !data.partner) throw new Error(data.error ?? "This room is no longer active.");
         if (active) setLiveRoom(data);
       } catch (error) {
         if (active) setRoomError(error instanceof Error ? error.message : "This live room could not be verified.");
@@ -173,9 +203,10 @@ export function ChatRoom({ roomId }: { roomId: string }) {
     await sendMessage(content);
   }
 
-  async function endConversation() {
+  async function endConversation(reason: "skip" | "call-ended" = "call-ended") {
     setEnded(true);
-    await fetch("/api/rooms/end", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ roomId }) }).catch(() => undefined);
+    if (liveRoom?.mode !== "text") await media.endConnection(reason);
+    await fetch("/api/rooms/end", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ roomId, reason: reason === "skip" ? "skipped" : "ended" }) }).catch(() => undefined);
   }
 
   async function submitReport(reason: ReportReason) {
@@ -229,8 +260,9 @@ export function ChatRoom({ roomId }: { roomId: string }) {
               )}
             </AnimatePresence>
           </div>
-          <Button variant="danger" onClick={endConversation} className="hidden sm:flex"><PhoneOff className="size-4" /> End</Button>
-          <Button variant="danger" size="icon" onClick={endConversation} className="sm:hidden" aria-label="End conversation"><PhoneOff className="size-4" /></Button>
+          <Button variant="secondary" onClick={() => void endConversation("skip")} className="hidden sm:flex"><RotateCcw className="size-4" /> Next</Button>
+          <Button variant="danger" onClick={() => void endConversation()} className="hidden sm:flex"><PhoneOff className="size-4" /> End</Button>
+          <Button variant="danger" size="icon" onClick={() => void endConversation()} className="sm:hidden" aria-label="End conversation"><PhoneOff className="size-4" /></Button>
         </div>
       </header>
 
@@ -287,7 +319,7 @@ export function ChatRoom({ roomId }: { roomId: string }) {
               </form>
             </div>
           ) : (
-            <MediaStage profile={profile} partner={liveRoom.partner} mode={liveRoom.mode} roomId={roomId} initiator={liveRoom.initiator} />
+            <MediaStage profile={profile} partner={liveRoom.partner} mode={liveRoom.mode} media={media} onNext={() => void endConversation("skip")} onReport={() => setReportOpen(true)} onEnd={() => void endConversation()} />
           )}
         </GlassCard>
 

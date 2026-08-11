@@ -16,6 +16,13 @@ export function useRoomChat(roomId: string, profile: AnonymousProfile | null) {
     queueMicrotask(() => setMessages([]));
 
     let active = true;
+    void fetch(`/api/messages?roomId=${encodeURIComponent(roomId)}`, { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) return;
+        const data = await response.json() as { messages?: ChatMessage[] };
+        if (active && data.messages) setMessages(data.messages);
+      })
+      .catch(() => undefined);
     void subscribeToRoom(roomId, {
       onMessage: (incoming) => {
         if (incoming.senderId === profile.id) return;
@@ -25,14 +32,15 @@ export function useRoomChat(roomId: string, profile: AnonymousProfile | null) {
         if (senderId !== profile.id) setPartnerTyping(typing);
       },
     }).then((channel) => {
-      if (!active) leaveRoomChannel(channel);
+      if (!active) void leaveRoomChannel(channel);
       else channelRef.current = channel;
     }).catch(() => {
       channelRef.current = null;
     });
     return () => {
       active = false;
-      leaveRoomChannel(channelRef.current);
+      if (typingTimer.current) window.clearTimeout(typingTimer.current);
+      void leaveRoomChannel(channelRef.current);
       channelRef.current = null;
     };
   }, [profile, roomId]);

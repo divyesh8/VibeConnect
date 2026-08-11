@@ -10,13 +10,10 @@ export async function POST(request: NextRequest) {
   if (!parsed.success) return NextResponse.json({ error: "Invalid room." }, { status: 400 });
   const supabase = createServerSupabase();
   if (!supabase) return NextResponse.json({ error: "Live rooms are unavailable." }, { status: 503 });
-  const { data: membership } = await supabase.from("room_members").select("room_id").eq("room_id", parsed.data.roomId).eq("user_id", user.id).maybeSingle();
-  if (!membership) return NextResponse.json({ error: "Not allowed." }, { status: 403 });
-  const { data, error } = await supabase.rpc("end_active_room", {
+  const { data, error } = await supabase.rpc("mark_room_connected", {
     p_user_id: user.id,
     p_room_id: parsed.data.roomId,
-    p_reason: parsed.data.reason ?? "ended",
   });
-  if (error || !data) return NextResponse.json({ error: "The room could not be ended." }, { status: 503 });
-  return NextResponse.json({ ended: true });
+  if (error || !data) return NextResponse.json({ error: "The connected call could not be confirmed." }, { status: 503 });
+  return NextResponse.json({ connected: true });
 }
