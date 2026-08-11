@@ -108,7 +108,7 @@ export function SetupForm() {
           <div className="relative">
             <div className="eyebrow"><Sparkles className="size-3.5" /> Make it yours</div>
             <h1 className="mt-6 text-balance font-display text-[3.3rem] font-semibold leading-[.95] tracking-[-.065em]">Set your vibe.<br /><span className="text-white/28">We&apos;ll find the rest.</span></h1>
-            <p className="mt-6 max-w-sm text-sm leading-6 text-white/43">A nickname is all you need. Your session disappears when you leave.</p>
+            <p className="mt-6 max-w-sm text-sm leading-6 text-white/43">A nickname is all you need. Your session goes offline when you leave.</p>
           </div>
 
           <div className="relative mt-auto space-y-3">
