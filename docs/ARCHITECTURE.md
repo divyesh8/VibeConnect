@@ -22,7 +22,7 @@ All application tables use RLS. Direct table writes are revoked; validated serve
 
 ## Matching algorithm
 
-`propose_real_match` locks the requester, scans same-mode searching users with `FOR UPDATE SKIP LOCKED`, and excludes active bans, blocks, stale heartbeats, and pairs seen in the previous 24 hours. If nobody eligible is live, the requester remains in the queue indefinitely. The browser also joins a private Supabase Realtime Presence topic for its communication mode and refreshes `last_seen` every ten seconds.
+`propose_real_match` locks the requester, scans same-mode and strictly gender-compatible searching users with `FOR UPDATE SKIP LOCKED`, and excludes active bans, blocks, stale heartbeats, active-room memberships, and pairs seen in the previous 24 hours. Male and female sessions match reciprocally; other sessions match other sessions. If nobody eligible is live, the requester remains in the queue indefinitely. The browser also joins a private Supabase Realtime Presence topic for its communication mode and refreshes `last_seen` every ten seconds.
 
 A candidate creates only a time-limited `match_proposals` row and moves both users into `confirming`. Each browser must call `accept_real_match`; only when both live sessions accept does PostgreSQL atomically create the room, add both memberships, and mark both users connected. A decline, timeout, cancellation, lost heartbeat, or closed browser returns any remaining live user to searching. There is no generated identity or automated conversation path.
 
@@ -32,11 +32,11 @@ Text writes pass through `/api/messages`, where membership, length, normalizatio
 
 ## WebRTC flow
 
-Voice and video permissions are requested only after a user gesture. Each peer adds the in-memory `MediaStream` to an `RTCPeerConnection`. Offer, answer, and ICE candidate payloads travel as ephemeral Broadcast events through the room's private Supabase Realtime channel; they are never inserted into PostgreSQL. Audio and video tracks flow peer-to-peer over SRTP and are never sent to Supabase, the application server, database, or object storage. Production deployments must configure TURN credentials for restrictive networks. TURN only relays encrypted media packets and does not save calls.
+Voice and video permissions are requested only after a user gesture. Both browsers first subscribe to the private room channel and repeat a media-ready event until both sides are ready. Only the deterministic initiator creates the offer. Each peer adds its validated in-memory `MediaStream` to exactly one `RTCPeerConnection` before SDP creation. Offer, answer, and queued trickle-ICE payloads travel as ephemeral Broadcast events through the room channel; they are never inserted into PostgreSQL. The room remains `connecting` until the browser reports a genuinely connected peer state. Audio and video tracks flow peer-to-peer over SRTP and are never sent to Supabase, the application server, database, or object storage. ICE configuration comes from a room-authorized server endpoint so TURN secrets are not bundled into JavaScript.
 
 ## Safety and operations
 
-Messages use the OpenAI `omni-moderation-latest` endpoint when `OPENAI_API_KEY` is configured, with a deterministic emergency filter if the moderation service is unavailable. Flagged content is rejected before storage, increments the sender warning count, and produces a temporary 24-hour ban after repeated violations. The hidden admin route requires `ADMIN_ACCESS_TOKEN` and displays only current database counts and reports.
+Messages use the OpenAI `omni-moderation-latest` endpoint when `OPENAI_API_KEY` is configured, with a deterministic emergency filter if the moderation service is unavailable. Flagged content is rejected before storage, increments the sender warning count, and produces a temporary 24-hour ban after repeated violations. Session creation is distributed-rate-limited and optionally requires a server-verified Cloudflare Turnstile token. The hidden admin route requires `ADMIN_ACCESS_TOKEN` and displays only current database counts and reports.
 
 ## Scaling notes
 

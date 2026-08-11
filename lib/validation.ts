@@ -5,6 +5,7 @@ export const sessionSchema = z.object({
   gender: z.enum(["male", "female", "other"]),
   mode: z.enum(["text", "voice", "video"]),
   interests: z.array(z.string().trim().min(1).max(32)).max(5).default([]),
+  botToken: z.string().max(2048).optional(),
 });
 
 export const messageSchema = z.object({

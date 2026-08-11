@@ -20,7 +20,13 @@ export function useRoomChat(roomId: string, profile: AnonymousProfile | null) {
       .then(async (response) => {
         if (!response.ok) return;
         const data = await response.json() as { messages?: ChatMessage[] };
-        if (active && data.messages) setMessages(data.messages);
+        if (active && data.messages) {
+          setMessages((current) => {
+            const merged = new Map(data.messages?.map((message) => [message.id, message]) ?? []);
+            for (const message of current) merged.set(message.id, message);
+            return [...merged.values()].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+          });
+        }
       })
       .catch(() => undefined);
     void subscribeToRoom(roomId, {

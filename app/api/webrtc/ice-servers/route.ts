@@ -72,7 +72,7 @@ export async function GET(request: NextRequest) {
     const iceServers = [...configuredStunServers(), ...(managed ?? (staticTurn ? [staticTurn] : []))];
     return NextResponse.json({
       iceServers,
-      forceRelay: process.env.NODE_ENV !== "production" && process.env.NEXT_PUBLIC_WEBRTC_FORCE_RELAY === "true",
+      forceRelay: process.env.NODE_ENV !== "production" && process.env.WEBRTC_FORCE_RELAY === "true",
       turnConfigured: Boolean(managed?.length || staticTurn),
     }, { headers: { "cache-control": "private, no-store" } });
   } catch (error) {

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requestIp, allowDistributedRequest, sha256 } from "@/lib/server/security";
 import { SESSION_COOKIE } from "@/lib/server/session";
+import { verifyTurnstile } from "@/lib/server/turnstile";
 import { sessionSchema } from "@/lib/validation";
 import { createServerSupabase } from "@/services/supabase";
 
@@ -16,6 +17,9 @@ export async function POST(request: NextRequest) {
 
   const parsed = sessionSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "Invalid profile details." }, { status: 400 });
+  if (!await verifyTurnstile(parsed.data.botToken, ip)) {
+    return NextResponse.json({ error: "The anti-bot check expired or failed. Please try it again." }, { status: 403 });
+  }
 
   const accessToken = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
   if (!accessToken) return NextResponse.json({ error: "Anonymous identity is required." }, { status: 401 });

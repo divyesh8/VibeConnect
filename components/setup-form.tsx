@@ -13,7 +13,8 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import Script from "next/script";
+import { useEffect, useState } from "react";
 import { AmbientBackground } from "@/components/ambient-background";
 import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
@@ -37,8 +38,23 @@ export function SetupForm() {
   const [mode, setMode] = useState<CommunicationMode>("text");
   const [interests, setInterests] = useState<string[]>([]);
   const [ageConfirmed, setAgeConfirmed] = useState(false);
+  const [botToken, setBotToken] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
+
+  useEffect(() => {
+    const browserWindow = window as typeof window & {
+      onVibeConnectTurnstile?: (token: string) => void;
+      onVibeConnectTurnstileExpired?: () => void;
+    };
+    browserWindow.onVibeConnectTurnstile = (token) => setBotToken(token);
+    browserWindow.onVibeConnectTurnstileExpired = () => setBotToken("");
+    return () => {
+      delete browserWindow.onVibeConnectTurnstile;
+      delete browserWindow.onVibeConnectTurnstileExpired;
+    };
+  }, []);
 
   const toggleInterest = (interest: string) => {
     setInterests((current) =>
@@ -70,6 +86,10 @@ export function SetupForm() {
       setError("You must confirm that you are 18 or older to continue.");
       return;
     }
+    if (turnstileSiteKey && !botToken) {
+      setError("Complete the anti-bot check before continuing.");
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -77,7 +97,7 @@ export function SetupForm() {
       const response = await fetch("/api/session", {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${authSession.access_token}` },
-        body: JSON.stringify({ username: cleanUsername, gender, mode, interests }),
+        body: JSON.stringify({ username: cleanUsername, gender, mode, interests, botToken: botToken || undefined }),
       });
       const data = await response.json() as { profile?: AnonymousProfile; error?: string };
       if (!response.ok || !data.profile) throw new Error(data.error ?? "Live matching is unavailable.");
@@ -181,6 +201,13 @@ export function SetupForm() {
                 <input id="age-confirmation" type="checkbox" checked={ageConfirmed} onChange={(event) => setAgeConfirmed(event.target.checked)} className="mt-0.5 size-4 accent-[#78f7df]" />
                 <div><label htmlFor="age-confirmation" className="cursor-pointer text-xs font-extrabold text-white/72">I am 18 or older</label><span className="mt-1 block text-[10px] leading-4 text-white/32">Stranger conversations can be unpredictable. Minors may not use this service.</span></div>
               </div>
+
+              {turnstileSiteKey && (
+                <div className="rounded-2xl border border-white/[0.08] bg-white/[0.025] p-3">
+                  <Script src="https://challenges.cloudflare.com/turnstile/v0/api.js" strategy="afterInteractive" />
+                  <div className="cf-turnstile" data-sitekey={turnstileSiteKey} data-theme="dark" data-size="flexible" data-action="create-session" data-callback="onVibeConnectTurnstile" data-expired-callback="onVibeConnectTurnstileExpired" />
+                </div>
+              )}
 
               <fieldset>
                 <legend className="mb-2.5 text-xs font-extrabold text-white/70">How do you want to connect?</legend>
