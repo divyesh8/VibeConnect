@@ -7,6 +7,24 @@ import type { CommunicationMode, WebRTCDiagnostics, WebRTCPhase } from "@/types"
 import { PeerManager, type PeerSignal } from "@/webrtc/peer-manager";
 
 type IceServerResponse = { iceServers?: RTCIceServer[]; forceRelay?: boolean; error?: string };
+type MediaStatus = "idle" | "requesting" | "ready" | "error";
+type MediaPermissionStatus = "unknown" | "granted" | "denied";
+type SignalProgress = "not-sent" | "sent" | "received";
+type SignalDiagnostics = {
+  peerReady: SignalProgress;
+  offer: SignalProgress;
+  answer: SignalProgress;
+  localIce: number;
+  remoteIce: number;
+};
+
+const EMPTY_SIGNAL_DIAGNOSTICS: SignalDiagnostics = {
+  peerReady: "not-sent",
+  offer: "not-sent",
+  answer: "not-sent",
+  localIce: 0,
+  remoteIce: 0,
+};
 
 type UseWebRTCOptions = {
   enabled: boolean;
@@ -34,6 +52,22 @@ function mediaErrorMessage(error: unknown, mode: CommunicationMode) {
   return "We could not start your camera or microphone.";
 }
 
+async function requestLocalMedia(mode: CommunicationMode) {
+  const constraints: MediaStreamConstraints = {
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    video: mode === "video" ? { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } } : false,
+  };
+  try {
+    return await navigator.mediaDevices.getUserMedia(constraints);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "OverconstrainedError" && mode === "video") {
+      console.warn("[MEDIA] requested camera constraints were unavailable; retrying with basic constraints", error);
+      return navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+    }
+    throw error;
+  }
+}
+
 function signalEnvelope(
   roomId: string,
   senderId: string,
@@ -56,6 +90,10 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
   const [phase, setPhase] = useState<WebRTCPhase>(enabled ? "subscribing" : "idle");
   const [error, setError] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<WebRTCDiagnostics | null>(null);
+  const [mediaStatus, setMediaStatus] = useState<MediaStatus>("idle");
+  const [mediaPermission, setMediaPermission] = useState<MediaPermissionStatus>("unknown");
+  const [realtimeStatus, setRealtimeStatus] = useState<"IDLE" | "CONNECTING" | "SUBSCRIBED" | "TIMED_OUT" | "CLOSED" | "CHANNEL_ERROR">("IDLE");
+  const [signalDiagnostics, setSignalDiagnostics] = useState<SignalDiagnostics>(EMPTY_SIGNAL_DIAGNOSTICS);
 
   const streamRef = useRef<MediaStream | null>(null);
   const peerRef = useRef<PeerManager | null>(null);
@@ -92,6 +130,13 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
     signal: PeerSignal | { kind: "peer-ready"; mediaReady: boolean } | { kind: "restart-request" } | { kind: "skip" | "call-ended" | "peer-disconnected" },
   ) => {
     await sendSignal(channelRef.current, signalEnvelope(roomId, userId, signal));
+    if (signal.kind === "peer-ready") {
+      console.info("[SIGNAL] peer-ready sent", { mediaReady: signal.mediaReady });
+      setSignalDiagnostics((current) => ({ ...current, peerReady: "sent" }));
+    }
+    if (signal.kind === "offer") setSignalDiagnostics((current) => ({ ...current, offer: "sent" }));
+    if (signal.kind === "answer") setSignalDiagnostics((current) => ({ ...current, answer: "sent" }));
+    if (signal.kind === "ice-candidate") setSignalDiagnostics((current) => ({ ...current, localIce: current.localIce + 1 }));
   }, [roomId, userId]);
 
   const refreshDiagnostics = useCallback(async () => {
@@ -230,6 +275,10 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
       setLocalStream(null);
       setRemoteStream(null);
       setDiagnostics(null);
+      setMediaStatus("idle");
+      setMediaPermission("unknown");
+      setRealtimeStatus("IDLE");
+      setSignalDiagnostics(EMPTY_SIGNAL_DIAGNOSTICS);
     }
   }, [clearTimer]);
 
@@ -241,6 +290,8 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
 
     try {
       if (signal.kind === "peer-ready") {
+        console.info("[SIGNAL] peer-ready received", { mediaReady: signal.mediaReady });
+        setSignalDiagnostics((current) => ({ ...current, peerReady: "received" }));
         if (signal.mediaReady) {
           remoteReadyRef.current = true;
           if (mediaReadyRef.current && phaseRef.current === "waiting-for-peer") setPhase("signaling");
@@ -249,11 +300,13 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
         return;
       }
       if (signal.kind === "ice-candidate") {
+        setSignalDiagnostics((current) => ({ ...current, remoteIce: current.remoteIce + 1 }));
         if (peerRef.current) await peerRef.current.addRemoteIceCandidate(signal.candidate);
         else pendingBeforePeerRef.current.push(signal.candidate);
         return;
       }
       if (signal.kind === "offer") {
+        setSignalDiagnostics((current) => ({ ...current, offer: "received" }));
         if (initiator || !peerRef.current || !mediaReadyRef.current) return;
         setPhase("signaling");
         startConnectionTimeout();
@@ -262,6 +315,7 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
         return;
       }
       if (signal.kind === "answer") {
+        setSignalDiagnostics((current) => ({ ...current, answer: "received" }));
         if (!initiator || !peerRef.current) return;
         await peerRef.current.acceptAnswer(signal.sdp);
         setPhase("ice-connecting");
@@ -292,8 +346,12 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
     }
     let active = true;
     queueMicrotask(() => setPhase("subscribing"));
+    queueMicrotask(() => setRealtimeStatus("CONNECTING"));
     const subscription = subscribeToRoom(roomId, {
       onSignal: (signal) => void handleSignal(signal),
+      onStatus: (status) => {
+        if (active) setRealtimeStatus(status);
+      },
     });
     signalingPromiseRef.current = subscription;
     void subscription
@@ -303,13 +361,15 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
           return;
         }
         channelRef.current = channel;
+        setRealtimeStatus("SUBSCRIBED");
         setPhase("idle");
         return send({ kind: "peer-ready", mediaReady: false });
       })
       .catch((subscriptionError) => {
         console.error("[SIGNAL] private room subscription failed", subscriptionError);
         if (active) {
-          setError("The private signaling channel could not be opened. Verify Supabase Realtime room policies.");
+          const details = subscriptionError instanceof Error ? subscriptionError.message : "Unknown Supabase Realtime error";
+          setError(`The private signaling channel could not be opened: ${details}`);
           setPhase("failed");
         }
       });
@@ -321,44 +381,85 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
   }, [cleanupConnection, enabled, handleSignal, mode, roomId, send, userId]);
 
   const startMedia = useCallback(async () => {
-    if (!enabled || mode === "text" || mediaReadyRef.current) return;
+    console.info("[MEDIA] Enable button clicked");
+    if (!enabled || mode === "text") return;
+    console.info("[MEDIA] location:", window.location.href);
+    console.info("[MEDIA] secure context:", window.isSecureContext);
+    console.info("[MEDIA] mediaDevices:", Boolean(navigator.mediaDevices));
+    if (!window.isSecureContext) {
+      setMediaStatus("error");
+      setError("Camera and microphone require HTTPS.");
+      setPhase("failed");
+      return;
+    }
     if (!navigator.mediaDevices?.getUserMedia) {
+      setMediaStatus("error");
       setError("This browser does not support live camera or microphone access.");
       setPhase("failed");
       return;
     }
     setError(null);
-    setPhase("media-preparing");
-    let acquiredStream: MediaStream | null = null;
+    let stream = streamRef.current;
+    if (!stream) {
+      setMediaStatus("requesting");
+      setPhase("media-preparing");
+      console.info("[MEDIA] requesting camera + microphone");
+      try {
+        stream = await requestLocalMedia(mode);
+        const audioTrack = stream.getAudioTracks()[0];
+        const videoTrack = stream.getVideoTracks()[0];
+        if (!audioTrack || audioTrack.readyState !== "live") throw new Error("A live microphone track was not created.");
+        if (mode === "video" && (!videoTrack || videoTrack.readyState !== "live")) throw new Error("A live camera track was not created.");
+
+        console.info("[MEDIA] getUserMedia SUCCESS");
+        console.info("[MEDIA] tracks:", stream.getTracks().map((track) => ({
+          id: track.id,
+          kind: track.kind,
+          enabled: track.enabled,
+          muted: track.muted,
+          readyState: track.readyState,
+        })));
+        streamRef.current = stream;
+        mediaReadyRef.current = true;
+        setLocalStream(stream);
+        setMicEnabled(true);
+        setCameraEnabled(mode === "video");
+        setMediaPermission("granted");
+        setMediaStatus("ready");
+      } catch (mediaError) {
+        stream?.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+        mediaReadyRef.current = false;
+        console.error("[MEDIA] getUserMedia FAILED:", mediaError);
+        console.error("[MEDIA] error name:", mediaError instanceof Error ? mediaError.name : "Unknown");
+        console.error("[MEDIA] error message:", mediaError instanceof Error ? mediaError.message : String(mediaError));
+        if (mediaError instanceof DOMException && (mediaError.name === "NotAllowedError" || mediaError.name === "SecurityError")) {
+          setMediaPermission("denied");
+        }
+        setMediaStatus("error");
+        setError(mediaErrorMessage(mediaError, mode));
+        setPhase("failed");
+        return;
+      }
+    }
+
+    // Local preview is live at this point. Signaling and ICE setup are intentionally independent.
     try {
-      const signalingChannel = await signalingPromiseRef.current;
-      if (!signalingChannel || !channelRef.current) throw new Error("The private signaling channel is not ready yet. Try again in a moment.");
-      const [stream, iceResponse] = await Promise.all([
-        navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-          video: mode === "video" ? { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } } : false,
-        }),
+      const [signalingChannel, iceResponse] = await Promise.all([
+        signalingPromiseRef.current,
         fetch(`/api/webrtc/ice-servers?roomId=${encodeURIComponent(roomId)}`, { cache: "no-store" }),
       ]);
-      acquiredStream = stream;
+      if (!signalingChannel || !channelRef.current) throw new Error("The private signaling channel is not ready yet. Try again in a moment.");
       const iceData = await iceResponse.json() as IceServerResponse;
       if (!iceResponse.ok || !iceData.iceServers?.length) throw new Error(iceData.error ?? "WebRTC network configuration is unavailable.");
-      const audioTrack = stream.getAudioTracks()[0];
-      const videoTrack = stream.getVideoTracks()[0];
-      if (!audioTrack || audioTrack.readyState !== "live") throw new Error("A live microphone track was not created.");
-      if (mode === "video" && (!videoTrack || videoTrack.readyState !== "live")) throw new Error("A live camera track was not created.");
 
-      streamRef.current = stream;
-      setLocalStream(stream);
-      setMicEnabled(true);
-      setCameraEnabled(mode === "video");
       const peer = createPeer(iceData.iceServers, Boolean(iceData.forceRelay));
-      peer.addLocalStream(stream);
+      if (!peer.connection.getSenders().some((sender) => sender.track)) peer.addLocalStream(stream);
       for (const candidate of pendingBeforePeerRef.current) await peer.addRemoteIceCandidate(candidate);
       pendingBeforePeerRef.current = [];
-      mediaReadyRef.current = true;
       setPhase(remoteReadyRef.current ? "signaling" : "waiting-for-peer");
       await send({ kind: "peer-ready", mediaReady: true });
+      if (readyTimerRef.current) window.clearInterval(readyTimerRef.current);
       readyTimerRef.current = window.setInterval(() => {
         if (phaseRef.current !== "connected" && phaseRef.current !== "ended") {
           void send({ kind: "peer-ready", mediaReady: true }).catch((readyError) => console.warn("[SIGNAL] ready heartbeat failed", readyError));
@@ -366,10 +467,9 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
       }, 1_500);
       statsTimerRef.current = window.setInterval(() => void refreshDiagnostics(), 1_000);
       await maybeCreateOffer();
-    } catch (mediaError) {
-      acquiredStream?.getTracks().forEach((track) => track.stop());
-      console.error("[MEDIA] setup failed", mediaError);
-      setError(mediaErrorMessage(mediaError, mode));
+    } catch (connectionError) {
+      console.error("[WEBRTC] setup failed after local media became ready", connectionError);
+      setError(connectionError instanceof Error ? connectionError.message : "The secure call setup failed.");
       setPhase("failed");
     }
   }, [createPeer, enabled, maybeCreateOffer, mode, refreshDiagnostics, roomId, send]);
@@ -448,6 +548,13 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
     statusMessage: statusMessage[phase],
     error,
     diagnostics,
+    mediaStatus,
+    mediaPermission,
+    realtimeStatus,
+    signalDiagnostics,
+    secureContext: typeof window === "undefined" ? false : window.isSecureContext,
+    roomId,
+    role: initiator ? "initiator" as const : "receiver" as const,
     startMedia,
     retryConnection,
     endConnection,

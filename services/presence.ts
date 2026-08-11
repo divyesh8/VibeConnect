@@ -1,19 +1,22 @@
 import type { RealtimeChannel } from "@supabase/supabase-js";
-import { getBrowserSupabase } from "@/services/supabase";
+import { ensureAnonymousAuth, getBrowserSupabase } from "@/services/supabase";
 import type { AnonymousProfile } from "@/types";
 
 export async function connectQueuePresence(
   profile: AnonymousProfile,
-  status: "searching" | "confirming",
+  queueStatus: "searching" | "confirming",
   onSync: (liveSearchingSessions: number) => void,
 ) {
   const supabase = getBrowserSupabase();
   if (!supabase) throw new Error("Supabase is not configured");
-  const { data } = await supabase.auth.getSession();
-  if (!data.session || data.session.user.id !== profile.id) throw new Error("Presence authorization failed");
-  await supabase.realtime.setAuth(data.session.access_token);
+  const session = await ensureAnonymousAuth();
+  if (!session.access_token || session.user.id !== profile.id) throw new Error("Presence authorization failed");
+  console.info("[AUTH] session:", session.user.id);
+  await supabase.realtime.setAuth(session.access_token);
 
-  const channel = supabase.channel(`queue:${profile.mode}`, {
+  const topic = `queue:${profile.mode}`;
+  console.info("[REALTIME] subscribing:", topic);
+  const channel = supabase.channel(topic, {
     config: {
       private: true,
       presence: { key: profile.id },
@@ -28,20 +31,46 @@ export async function connectQueuePresence(
     onSync(liveSearchingSessions);
   });
 
-  await new Promise<void>((resolve, reject) => {
-    const timeout = window.setTimeout(() => reject(new Error("Presence connection timed out")), 8000);
-    channel.subscribe(async (status) => {
-      if (status === "SUBSCRIBED") {
+  try {
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const finish = (operation: () => void) => {
+        if (settled) return;
+        settled = true;
         window.clearTimeout(timeout);
-        await channel.track({ user_id: profile.id, status, online_at: new Date().toISOString() });
-        resolve();
-      }
-      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-        window.clearTimeout(timeout);
-        reject(new Error(`Presence channel ${status.toLowerCase()}`));
-      }
+        operation();
+      };
+      const timeout = window.setTimeout(() => {
+        const error = new Error("Presence connection timed out before Supabase returned a channel state.");
+        console.error("[REALTIME] FULL ERROR:", error);
+        finish(() => reject(error));
+      }, 10_000);
+
+      channel.subscribe(async (realtimeStatus, subscriptionError) => {
+        console.info("[REALTIME] STATUS:", realtimeStatus, { topic });
+        if (subscriptionError) {
+          console.error("[REALTIME] FULL ERROR:", subscriptionError);
+          console.error("[REALTIME] ERROR NAME:", subscriptionError.name);
+          console.error("[REALTIME] ERROR MESSAGE:", subscriptionError.message);
+          console.error("[REALTIME] ERROR CAUSE:", subscriptionError.cause);
+        }
+        if (realtimeStatus === "SUBSCRIBED") {
+          try {
+            await channel.track({ user_id: profile.id, status: queueStatus, online_at: new Date().toISOString() });
+            finish(resolve);
+          } catch (error) {
+            finish(() => reject(error));
+          }
+        }
+        if (realtimeStatus === "CHANNEL_ERROR" || realtimeStatus === "TIMED_OUT" || realtimeStatus === "CLOSED") {
+          finish(() => reject(subscriptionError ?? new Error(`Presence channel ${realtimeStatus.toLowerCase()}`)));
+        }
+      });
     });
-  });
+  } catch (error) {
+    await supabase.removeChannel(channel).catch(() => undefined);
+    throw error;
+  }
 
   return channel;
 }

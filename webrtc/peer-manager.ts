@@ -92,6 +92,7 @@ export class PeerManager {
       });
       this.connection.addTrack(track, stream);
     }
+    developmentLog("WEBRTC", "local senders ready", this.connection.getSenders().map((sender) => sender.track?.kind ?? "missing"));
   }
 
   async createOffer(options: { iceRestart?: boolean } = {}) {
@@ -100,9 +101,10 @@ export class PeerManager {
     try {
       developmentLog("SIGNAL", options.iceRestart ? "creating ICE-restart offer" : "creating offer");
       const offer = await this.connection.createOffer({ iceRestart: options.iceRestart });
+      developmentLog("SIGNAL", "OFFER CREATED", { type: offer.type, sdpLength: offer.sdp?.length ?? 0 });
       await this.connection.setLocalDescription(offer);
       await this.options.emitSignal({ kind: "offer", sdp: descriptionInit(this.connection.localDescription) });
-      developmentLog("SIGNAL", "offer sent");
+      developmentLog("SIGNAL", "OFFER SENT");
       return true;
     } finally {
       this.makingOffer = false;
@@ -119,18 +121,19 @@ export class PeerManager {
       await this.options.emitSignal({ kind: "answer", sdp: descriptionInit(this.connection.localDescription) });
       return;
     }
-    developmentLog("SIGNAL", "offer received");
+    developmentLog("SIGNAL", "OFFER RECEIVED", { type: sdp.type, sdpLength: sdp.sdp?.length ?? 0 });
     await this.connection.setRemoteDescription(sdp);
     await this.flushCandidates();
     const answer = await this.connection.createAnswer();
+    developmentLog("SIGNAL", "ANSWER CREATED", { type: answer.type, sdpLength: answer.sdp?.length ?? 0 });
     await this.connection.setLocalDescription(answer);
     await this.options.emitSignal({ kind: "answer", sdp: descriptionInit(this.connection.localDescription) });
-    developmentLog("SIGNAL", "answer sent");
+    developmentLog("SIGNAL", "ANSWER SENT");
   }
 
   async acceptAnswer(sdp: RTCSessionDescriptionInit) {
     if (this.closed || this.connection.signalingState === "stable") return;
-    developmentLog("SIGNAL", "answer received");
+    developmentLog("SIGNAL", "ANSWER RECEIVED", { type: sdp.type, sdpLength: sdp.sdp?.length ?? 0 });
     await this.connection.setRemoteDescription(sdp);
     await this.flushCandidates();
   }

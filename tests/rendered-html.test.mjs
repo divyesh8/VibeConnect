@@ -70,6 +70,24 @@ test("signaling is room-bound and waits for both media-ready peers", async () =>
   assert.doesNotMatch(env, /NEXT_PUBLIC_TURN_(?:URL|USERNAME|CREDENTIAL)=/);
 });
 
+test("local media preview is independent from Realtime subscription success", async () => {
+  const [hook, realtime] = await Promise.all([
+    readFile(new URL("hooks/use-webrtc.ts", root), "utf8"),
+    readFile(new URL("services/realtime.ts", root), "utf8"),
+  ]);
+  const startMedia = hook.slice(hook.indexOf("const startMedia"), hook.indexOf("const toggleMic"));
+  const requestIndex = startMedia.indexOf("stream = await requestLocalMedia(mode)");
+  const previewIndex = startMedia.indexOf("setLocalStream(stream)");
+  const subscriptionIndex = startMedia.indexOf("signalingPromiseRef.current");
+  assert.ok(requestIndex >= 0 && previewIndex > requestIndex && subscriptionIndex > previewIndex);
+  assert.match(startMedia, /if \(!window\.isSecureContext\)/);
+  assert.match(startMedia, /OverconstrainedError|requestLocalMedia/);
+  assert.match(realtime, /channel\.subscribe\(\(status, subscriptionError\)/);
+  assert.match(realtime, /\[REALTIME\] FULL ERROR:/);
+  assert.match(realtime, /ensureAnonymousAuth\(\)/);
+  assert.match(realtime, /await supabase\.realtime\.setAuth\(session\.access_token\)/);
+});
+
 test("Supabase client accepts current Vercel Marketplace variable names", async () => {
   const source = await readFile(new URL("services/supabase.ts", root), "utf8");
   assert.match(source, /NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY/);

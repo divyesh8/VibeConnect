@@ -53,8 +53,11 @@ function StreamVideo({ stream, muted, className, onPlaybackBlocked }: { stream: 
     const element = ref.current;
     if (!element) return;
     element.srcObject = stream;
-    if (stream) void element.play().catch(() => onPlaybackBlocked?.());
-  }, [onPlaybackBlocked, stream]);
+    if (stream) void element.play().catch((error) => {
+      console.error(`[MEDIA] ${muted ? "local" : "remote"} video play failed`, error);
+      onPlaybackBlocked?.();
+    });
+  }, [muted, onPlaybackBlocked, stream]);
   // Remote WebRTC streams do not have a separate timed-text caption source.
   // eslint-disable-next-line jsx-a11y/media-has-caption
   return <video ref={ref} autoPlay playsInline muted={muted} className={className} />;
@@ -135,12 +138,15 @@ function MediaStage({ profile, partner, mode, media, onNext, onReport, onEnd }: 
         {media.error && <div className="flex w-full flex-wrap items-center justify-center gap-2"><p className="text-center text-[10px] font-bold text-rose-300">{media.error}</p>{media.localStream && <Button variant="secondary" size="sm" onClick={media.retryConnection}>Retry</Button>}</div>}
         {playbackBlocked && <button onClick={() => { setPlaybackBlocked(false); document.querySelector<HTMLVideoElement>("video:not([muted])")?.play().catch(() => setPlaybackBlocked(true)); }} className="w-full text-center text-xs font-bold text-amber-200">Tap to start audio</button>}
       </div>
-      {diagnosticsVisible && media.diagnostics && (
+      {diagnosticsVisible && (
         <details className="border-t border-white/[0.07] bg-black/35 px-4 py-2 text-[9px] text-white/45">
-          <summary className="cursor-pointer font-bold text-white/55">WebRTC diagnostics · {media.diagnostics.candidateType}</summary>
+          <summary className="cursor-pointer font-bold text-white/55">WebRTC diagnostics · {media.diagnostics?.candidateType ?? "not-started"}</summary>
           <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-4">
-            <span>Role: {media.diagnostics.signalingState === "unavailable" ? "—" : "live"}</span><span>Signal: {media.diagnostics.signalingState}</span><span>ICE: {media.diagnostics.iceConnectionState}</span><span>Peer: {media.diagnostics.connectionState}</span>
-            <span>Local A/V: {media.diagnostics.localAudio}/{media.diagnostics.localVideo}</span><span>Remote A/V: {media.diagnostics.remoteAudio}/{media.diagnostics.remoteVideo}</span><span>Sent: {media.diagnostics.packetsSent} pkts</span><span>Received: {media.diagnostics.packetsReceived} pkts</span>
+            <span>Permission: {media.mediaPermission}</span><span>Secure: {media.secureContext ? "yes" : "no"}</span><span>Media: {media.mediaStatus}</span><span>Realtime: {media.realtimeStatus}</span>
+            <span className="truncate" title={media.roomId}>Room: {media.roomId}</span><span>Role: {media.role}</span><span>Peer ready: {media.signalDiagnostics.peerReady}</span><span>Signal: {media.diagnostics?.signalingState ?? "unavailable"}</span>
+            <span>Offer: {media.signalDiagnostics.offer}</span><span>Answer: {media.signalDiagnostics.answer}</span><span>Local ICE: {media.signalDiagnostics.localIce}</span><span>Remote ICE: {media.signalDiagnostics.remoteIce}</span>
+            <span>ICE: {media.diagnostics?.iceConnectionState ?? "unavailable"}</span><span>Peer: {media.diagnostics?.connectionState ?? "unavailable"}</span><span>Local A/V: {media.diagnostics?.localAudio ?? "missing"}/{media.diagnostics?.localVideo ?? "missing"}</span><span>Remote A/V: {media.diagnostics?.remoteAudio ?? "missing"}/{media.diagnostics?.remoteVideo ?? "missing"}</span>
+            <span>Sent: {media.diagnostics?.packetsSent ?? 0} pkts</span><span>Received: {media.diagnostics?.packetsReceived ?? 0} pkts</span>
           </div>
         </details>
       )}
@@ -239,6 +245,13 @@ export function ChatRoom({ roomId }: { roomId: string }) {
 
   const isText = liveRoom.mode === "text";
   const sharedInterests = profile.interests.filter((interest) => liveRoom.partner.interests.includes(interest));
+  const connectionSummary = sharedInterests.length
+    ? `Shared: ${sharedInterests.join(" + ")}`
+    : isText
+      ? "Matched in text mode"
+      : media.phase === "connected"
+        ? `${liveRoom.mode === "video" ? "Video" : "Voice"} connected`
+        : `Matched · ${liveRoom.mode} call not connected`;
 
   return (
     <main className="app-page flex h-[100dvh] flex-col overflow-hidden p-3 sm:p-4">
@@ -271,7 +284,7 @@ export function ChatRoom({ roomId }: { roomId: string }) {
           <div className="flex shrink-0 items-center justify-between px-3 py-2.5 sm:px-4 sm:py-3">
             <div className="flex items-center gap-3">
               <div className="profile-gradient-2 relative grid size-10 place-items-center rounded-[14px] font-display text-sm font-black text-[#0b2823]">{initials(liveRoom.partner.username)}<span className="absolute -bottom-1 -right-1 size-3 rounded-full border-2 border-[#15121d] bg-[#7dffb6]" /></div>
-              <div><div className="flex items-center gap-2"><h1 className="text-sm font-extrabold">{liveRoom.partner.username}</h1><span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[8px] font-black uppercase tracking-wider text-white/36">live</span></div><p className="mt-0.5 text-[10px] text-white/30">{sharedInterests.length ? `Shared: ${sharedInterests.join(" + ")}` : `Connected in ${liveRoom.mode} mode`}</p></div>
+              <div><div className="flex items-center gap-2"><h1 className="text-sm font-extrabold">{liveRoom.partner.username}</h1><span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[8px] font-black uppercase tracking-wider text-white/36">live</span></div><p className="mt-0.5 text-[10px] text-white/30">{connectionSummary}</p></div>
             </div>
             <div className="hidden items-center gap-2 text-[10px] font-bold text-white/25 sm:flex"><Sparkles className="size-3 text-[#ff86c5]" /> Keep it friendly</div>
           </div>

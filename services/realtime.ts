@@ -1,6 +1,8 @@
 import type { RealtimeChannel } from "@supabase/supabase-js";
-import { getBrowserSupabase } from "@/services/supabase";
+import { ensureAnonymousAuth, getBrowserSupabase } from "@/services/supabase";
 import type { ChatMessage } from "@/types";
+
+export type RealtimeSubscriptionStatus = "SUBSCRIBED" | "TIMED_OUT" | "CLOSED" | "CHANNEL_ERROR";
 
 export type SignalPayload =
   | { kind: "peer-ready"; mediaReady: boolean; roomId: string; senderId: string; timestamp: number; nonce: string }
@@ -26,17 +28,21 @@ export async function subscribeToRoom(
     onMessage?: (message: ChatMessage) => void;
     onTyping?: (payload: { senderId: string; typing: boolean }) => void;
     onSignal?: (signal: SignalPayload) => void;
+    onStatus?: (status: RealtimeSubscriptionStatus, error?: Error) => void;
   },
 ) {
   const supabase = getBrowserSupabase();
-  if (!supabase) return null;
+  if (!supabase) throw new Error("Supabase is not configured");
 
-  const { data } = await supabase.auth.getSession();
-  if (!data.session) return null;
-  supabase.realtime.setAuth(data.session.access_token);
+  const session = await ensureAnonymousAuth();
+  if (!session.access_token || !session.user.id) throw new Error("The anonymous Supabase session is incomplete.");
+  console.info("[AUTH] session:", session.user.id);
+  await supabase.realtime.setAuth(session.access_token);
 
+  const topic = `room:${roomId}`;
+  console.info("[SIGNAL] subscribing:", topic);
   const channel = supabase
-    .channel(`room:${roomId}`, { config: { private: true, broadcast: { self: false } } })
+    .channel(topic, { config: { private: true, broadcast: { self: false } } })
     .on(
       "postgres_changes",
       { event: "INSERT", schema: "public", table: "messages", filter: `room_id=eq.${roomId}` },
@@ -58,19 +64,42 @@ export async function subscribeToRoom(
       if (isSignalPayload(payload, roomId)) handlers.onSignal?.(payload);
     });
 
-  await new Promise<void>((resolve, reject) => {
-    const timeout = window.setTimeout(() => reject(new Error("Realtime connection timed out")), 8000);
-    channel.subscribe((status) => {
-      if (status === "SUBSCRIBED") {
+  try {
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const finish = (operation: () => void) => {
+        if (settled) return;
+        settled = true;
         window.clearTimeout(timeout);
-        resolve();
-      }
-      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-        window.clearTimeout(timeout);
-        reject(new Error(`Realtime channel ${status.toLowerCase()}`));
-      }
+        operation();
+      };
+      const timeout = window.setTimeout(() => {
+        const error = new Error("Realtime connection timed out before Supabase returned a channel state.");
+        console.error("[REALTIME] FULL ERROR:", error);
+        handlers.onStatus?.("TIMED_OUT", error);
+        finish(() => reject(error));
+      }, 10_000);
+
+      channel.subscribe((status, subscriptionError) => {
+        console.info("[REALTIME] STATUS:", status, { topic });
+        if (subscriptionError) {
+          console.error("[REALTIME] FULL ERROR:", subscriptionError);
+          console.error("[REALTIME] ERROR NAME:", subscriptionError.name);
+          console.error("[REALTIME] ERROR MESSAGE:", subscriptionError.message);
+          console.error("[REALTIME] ERROR CAUSE:", subscriptionError.cause);
+        }
+        handlers.onStatus?.(status, subscriptionError);
+        if (status === "SUBSCRIBED") finish(resolve);
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+          const error = subscriptionError ?? new Error(`Realtime channel ${status.toLowerCase()}`);
+          finish(() => reject(error));
+        }
+      });
     });
-  });
+  } catch (error) {
+    await supabase.removeChannel(channel).catch(() => undefined);
+    throw error;
+  }
 
   return channel;
 }
