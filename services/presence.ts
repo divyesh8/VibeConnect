@@ -9,10 +9,9 @@ export async function connectQueuePresence(
 ) {
   const supabase = getBrowserSupabase();
   if (!supabase) throw new Error("Supabase is not configured");
-  const response = await fetch(`/api/presence-token?mode=${encodeURIComponent(profile.mode)}`);
-  if (!response.ok) throw new Error("Presence authorization failed");
-  const { token } = await response.json() as { token: string };
-  await supabase.realtime.setAuth(token);
+  const { data } = await supabase.auth.getSession();
+  if (!data.session || data.session.user.id !== profile.id) throw new Error("Presence authorization failed");
+  await supabase.realtime.setAuth(data.session.access_token);
 
   const channel = supabase.channel(`queue:${profile.mode}`, {
     config: {

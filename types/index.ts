@@ -1,6 +1,17 @@
-export type Gender = "male" | "female" | "other" | "prefer_not_to_say";
+export type Gender = "male" | "female" | "other";
 export type CommunicationMode = "text" | "voice" | "video";
 export type OnlineStatus = "searching" | "confirming" | "connected" | "offline";
+export type WebRTCPhase =
+  | "idle"
+  | "subscribing"
+  | "media-preparing"
+  | "waiting-for-peer"
+  | "signaling"
+  | "ice-connecting"
+  | "connected"
+  | "reconnecting"
+  | "failed"
+  | "ended";
 
 export interface AnonymousProfile {
   id: string;
@@ -49,7 +60,7 @@ export interface MatchProposalStatus {
 export interface LiveRoomContext {
   initiator: boolean;
   mode: CommunicationMode;
-  status: "active" | "ended";
+  status: "connecting" | "active" | "ended";
   partner: {
     id: string;
     username: string;
@@ -62,4 +73,24 @@ export type ReportReason =
   | "hate_speech"
   | "sexual_content"
   | "spam"
-  | "threats";
+  | "threats"
+  | "underage_concern"
+  | "other";
+
+export interface WebRTCDiagnostics {
+  signalingState: RTCSignalingState | "unavailable";
+  iceGatheringState: RTCIceGatheringState | "unavailable";
+  iceConnectionState: RTCIceConnectionState | "unavailable";
+  connectionState: RTCPeerConnectionState | "unavailable";
+  localAudio: MediaStreamTrackState | "missing";
+  localVideo: MediaStreamTrackState | "missing";
+  remoteAudio: MediaStreamTrackState | "missing";
+  remoteVideo: MediaStreamTrackState | "missing";
+  bytesSent: number;
+  bytesReceived: number;
+  packetsSent: number;
+  packetsReceived: number;
+  framesEncoded: number;
+  framesDecoded: number;
+  candidateType: "host" | "srflx" | "prflx" | "relay" | "unknown";
+}

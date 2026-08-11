@@ -7,6 +7,16 @@ const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
   { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
 ];
 
+function configuredIceServers(): RTCIceServer[] {
+  const turnUrl = process.env.NEXT_PUBLIC_TURN_URL;
+  if (!turnUrl) return DEFAULT_ICE_SERVERS;
+  return [...DEFAULT_ICE_SERVERS, {
+    urls: turnUrl.split(",").map((url) => url.trim()),
+    username: process.env.NEXT_PUBLIC_TURN_USERNAME,
+    credential: process.env.NEXT_PUBLIC_TURN_CREDENTIAL,
+  }];
+}
+
 export class PeerManager {
   readonly connection: RTCPeerConnection;
   private pendingCandidates: RTCIceCandidateInit[] = [];
@@ -17,7 +27,7 @@ export class PeerManager {
     onRemoteStream: (stream: MediaStream) => void,
   ) {
     this.connection = new RTCPeerConnection({
-      iceServers: DEFAULT_ICE_SERVERS,
+      iceServers: configuredIceServers(),
       iceCandidatePoolSize: 8,
     });
     this.connection.onicecandidate = (event) => {

@@ -9,11 +9,21 @@ export function getBrowserSupabase() {
     || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   browserClient = url && anonKey
     ? createClient(url, anonKey, {
-        auth: { persistSession: false, autoRefreshToken: false },
+        auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
         realtime: { params: { eventsPerSecond: 12 } },
       })
     : null;
   return browserClient;
+}
+
+export async function ensureAnonymousAuth() {
+  const supabase = getBrowserSupabase();
+  if (!supabase) throw new Error("Supabase is not configured");
+  const { data: existing } = await supabase.auth.getSession();
+  if (existing.session) return existing.session;
+  const { data, error } = await supabase.auth.signInAnonymously();
+  if (error || !data.session) throw new Error(error?.message ?? "Could not create an anonymous identity");
+  return data.session;
 }
 
 export function createServerSupabase() {

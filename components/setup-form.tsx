@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { GlassCard } from "@/components/ui/glass-card";
 import { GENDERS, INTERESTS, MODES } from "@/lib/constants";
 import { saveLocalProfile } from "@/lib/session";
+import { ensureAnonymousAuth } from "@/services/supabase";
 import { cn } from "@/lib/utils";
 import type { AnonymousProfile, CommunicationMode, Gender } from "@/types";
 
@@ -67,9 +68,10 @@ export function SetupForm() {
 
     setSubmitting(true);
     try {
+      const authSession = await ensureAnonymousAuth();
       const response = await fetch("/api/session", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", authorization: `Bearer ${authSession.access_token}` },
         body: JSON.stringify({ username: cleanUsername, gender, mode, interests }),
       });
       const data = await response.json() as { profile?: AnonymousProfile; error?: string };

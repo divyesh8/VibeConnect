@@ -4,7 +4,7 @@
 
 VibeConnect is a Next.js App Router application with a deliberately thin server boundary. The browser owns temporary presentation state and media streams. Next.js route handlers validate every mutation, enforce rate limits, authenticate the anonymous session through an HTTP-only cookie, and use a Supabase service-role client. Supabase PostgreSQL is the durable source of truth for presence, rooms, messages, safety actions, and enforcement history.
 
-No account is created. Starting a session generates a user UUID, public session UUID, and a high-entropy secret kept only in an HTTP-only, same-site cookie. Only its SHA-256 hash is stored. The browser stores the non-secret temporary profile in `sessionStorage` for navigation continuity; it is not authoritative.
+No signup screen or PII is requested. The browser invisibly creates a Supabase Anonymous Auth session and receives a real authenticated UUID. Starting a session binds the temporary profile to that UUID and issues a high-entropy HTTP-only application cookie for server-route isolation. The browser stores only the non-secret profile in `sessionStorage`.
 
 ## Database design
 
@@ -18,7 +18,7 @@ No account is created. Starting a session generates a user UUID, public session 
 - `moderation_events`: provider, flagged categories, and scores without duplicating message content.
 - `rate_limit_buckets`: hashed distributed fixed-window limits.
 
-All application tables use RLS. Anonymous and regular authenticated database writes are revoked; server routes write with the service role. Custom, short-lived JWTs grant room members read access to only their room's message stream and private Realtime broadcast topic.
+All application tables use RLS. Direct table writes are revoked; validated server routes write with the service role. Native Supabase Auth access tokens authorize private Presence and Broadcast topics through RLS.
 
 ## Matching algorithm
 
@@ -32,7 +32,7 @@ Text writes pass through `/api/messages`, where membership, length, normalizatio
 
 ## WebRTC flow
 
-Voice and video permissions are requested only after a user gesture. Each peer adds the in-memory `MediaStream` to an `RTCPeerConnection`. Offer, answer, and ICE candidate payloads travel through the room's private Supabase Realtime channel. Audio and video tracks flow peer-to-peer over SRTP; they are never sent to the application server, database, or object storage. Production deployments should configure a TURN service in addition to STUN for restrictive networks.
+Voice and video permissions are requested only after a user gesture. Each peer adds the in-memory `MediaStream` to an `RTCPeerConnection`. Offer, answer, and ICE candidate payloads travel as ephemeral Broadcast events through the room's private Supabase Realtime channel; they are never inserted into PostgreSQL. Audio and video tracks flow peer-to-peer over SRTP and are never sent to Supabase, the application server, database, or object storage. Production deployments must configure TURN credentials for restrictive networks. TURN only relays encrypted media packets and does not save calls.
 
 ## Safety and operations
 

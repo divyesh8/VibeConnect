@@ -3,10 +3,22 @@ import { getBrowserSupabase } from "@/services/supabase";
 import type { ChatMessage } from "@/types";
 
 export type SignalPayload =
-  | { kind: "ready"; senderId: string }
-  | { kind: "offer"; sdp: RTCSessionDescriptionInit; senderId: string }
-  | { kind: "answer"; sdp: RTCSessionDescriptionInit; senderId: string }
-  | { kind: "ice"; candidate: RTCIceCandidateInit; senderId: string };
+  | { kind: "peer-ready"; mediaReady: boolean; roomId: string; senderId: string; timestamp: number; nonce: string }
+  | { kind: "offer"; sdp: RTCSessionDescriptionInit; roomId: string; senderId: string; timestamp: number; nonce: string }
+  | { kind: "answer"; sdp: RTCSessionDescriptionInit; roomId: string; senderId: string; timestamp: number; nonce: string }
+  | { kind: "ice-candidate"; candidate: RTCIceCandidateInit; roomId: string; senderId: string; timestamp: number; nonce: string }
+  | { kind: "restart-request"; roomId: string; senderId: string; timestamp: number; nonce: string }
+  | { kind: "skip" | "call-ended" | "peer-disconnected"; roomId: string; senderId: string; timestamp: number; nonce: string };
+
+function isSignalPayload(value: unknown, roomId: string): value is SignalPayload {
+  if (!value || typeof value !== "object") return false;
+  const payload = value as Record<string, unknown>;
+  return payload.roomId === roomId
+    && typeof payload.senderId === "string"
+    && typeof payload.timestamp === "number"
+    && typeof payload.nonce === "string"
+    && ["peer-ready", "offer", "answer", "ice-candidate", "restart-request", "skip", "call-ended", "peer-disconnected"].includes(String(payload.kind));
+}
 
 export async function subscribeToRoom(
   roomId: string,
@@ -19,10 +31,9 @@ export async function subscribeToRoom(
   const supabase = getBrowserSupabase();
   if (!supabase) return null;
 
-  const tokenResponse = await fetch(`/api/realtime-token?roomId=${encodeURIComponent(roomId)}`);
-  if (!tokenResponse.ok) return null;
-  const { token } = await tokenResponse.json() as { token: string };
-  supabase.realtime.setAuth(token);
+  const { data } = await supabase.auth.getSession();
+  if (!data.session) return null;
+  supabase.realtime.setAuth(data.session.access_token);
 
   const channel = supabase
     .channel(`room:${roomId}`, { config: { private: true, broadcast: { self: false } } })
@@ -43,7 +54,9 @@ export async function subscribeToRoom(
       },
     )
     .on("broadcast", { event: "typing" }, ({ payload }) => handlers.onTyping?.(payload as { senderId: string; typing: boolean }))
-    .on("broadcast", { event: "webrtc" }, ({ payload }) => handlers.onSignal?.(payload as SignalPayload));
+    .on("broadcast", { event: "webrtc" }, ({ payload }) => {
+      if (isSignalPayload(payload, roomId)) handlers.onSignal?.(payload);
+    });
 
   await new Promise<void>((resolve, reject) => {
     const timeout = window.setTimeout(() => reject(new Error("Realtime connection timed out")), 8000);
@@ -67,10 +80,11 @@ export async function sendTyping(channel: RealtimeChannel | null, senderId: stri
 }
 
 export async function sendSignal(channel: RealtimeChannel | null, signal: SignalPayload) {
+  if (!channel) throw new Error("The private signaling channel is not ready.");
   await channel?.send({ type: "broadcast", event: "webrtc", payload: signal });
 }
 
-export function leaveRoomChannel(channel: RealtimeChannel | null) {
+export async function leaveRoomChannel(channel: RealtimeChannel | null) {
   const supabase = getBrowserSupabase();
-  if (supabase && channel) void supabase.removeChannel(channel);
+  if (supabase && channel) await supabase.removeChannel(channel);
 }

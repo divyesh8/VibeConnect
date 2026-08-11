@@ -2,7 +2,7 @@ import { z } from "zod";
 
 export const sessionSchema = z.object({
   username: z.string().trim().min(3).max(20).regex(/^[a-zA-Z0-9_-]+$/),
-  gender: z.enum(["male", "female", "other", "prefer_not_to_say"]),
+  gender: z.enum(["male", "female", "other"]),
   mode: z.enum(["text", "voice", "video"]),
   interests: z.array(z.string().trim().min(1).max(32)).max(5).default([]),
 });
@@ -16,7 +16,7 @@ export const messageSchema = z.object({
 export const reportSchema = z.object({
   roomId: z.string().uuid(),
   reportedUserId: z.string().uuid(),
-  reason: z.enum(["harassment", "hate_speech", "sexual_content", "spam", "threats"]),
+  reason: z.enum(["harassment", "hate_speech", "sexual_content", "spam", "threats", "underage_concern", "other"]),
 });
 
 export const blockSchema = z.object({ blockedUserId: z.string().uuid() });

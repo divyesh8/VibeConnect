@@ -17,12 +17,16 @@ export async function POST(request: NextRequest) {
   const parsed = sessionSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "Invalid profile details." }, { status: 400 });
 
-  const userId = crypto.randomUUID();
+  const accessToken = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
+  if (!accessToken) return NextResponse.json({ error: "Anonymous identity is required." }, { status: 401 });
+  const { data: authData, error: authError } = await supabase.auth.getUser(accessToken);
+  if (authError || !authData.user?.is_anonymous) return NextResponse.json({ error: "Invalid anonymous identity." }, { status: 401 });
+  const userId = authData.user.id;
   const sessionId = crypto.randomUUID();
   const sessionToken = `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll("-", "");
   const tokenHash = await sha256(sessionToken);
   const createdAt = new Date().toISOString();
-  const { error } = await supabase.from("online_users").insert({
+  const { error } = await supabase.from("online_users").upsert({
     id: userId,
     session_id: sessionId,
     session_token_hash: tokenHash,
@@ -33,7 +37,7 @@ export async function POST(request: NextRequest) {
     status: "searching",
     last_seen: createdAt,
     created_at: createdAt,
-  });
+  }, { onConflict: "id" });
   if (error) return NextResponse.json({ error: "Could not create an anonymous session." }, { status: 503 });
 
   const response = NextResponse.json({

@@ -6,7 +6,7 @@ create extension if not exists pgcrypto;
 drop function if exists public.match_anonymous_user(uuid);
 
 create table if not exists public.online_users (
-  id uuid primary key default gen_random_uuid(),
+  id uuid primary key references auth.users(id) on delete cascade,
   session_id uuid not null unique,
   session_token_hash text not null unique,
   username text not null check (username ~ '^[A-Za-z0-9_-]{3,20}$'),
