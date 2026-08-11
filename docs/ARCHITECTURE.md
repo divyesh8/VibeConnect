@@ -4,7 +4,7 @@
 
 VibeConnect is a Next.js App Router application with a deliberately thin server boundary. The browser owns temporary presentation state and media streams. Next.js route handlers validate every mutation, enforce rate limits, authenticate the anonymous session through an HTTP-only cookie, and use a Supabase service-role client. Supabase PostgreSQL is the durable source of truth for presence, rooms, messages, safety actions, and enforcement history.
 
-No signup screen or PII is requested. The browser invisibly creates a Supabase Anonymous Auth session and receives a real authenticated UUID. Starting a session binds the temporary profile to that UUID and issues a high-entropy HTTP-only application cookie for server-route isolation. The browser stores only the non-secret profile in `sessionStorage`.
+No signup screen or PII is requested. The browser invisibly creates a Supabase Anonymous Auth session and receives a real authenticated UUID. Starting a session binds the temporary profile to that UUID and issues a high-entropy HTTP-only application cookie for server-route isolation. A single client provider stores and restores the non-secret profile from `sessionStorage` under `vibeconnect_guest_profile`; room, media, Realtime, and queue cleanup never clear it. Only the explicit Exit / Reset Profile action removes it. Display names preserve Unicode, spaces, punctuation, symbols, and case, while the client, API, and database consistently reject blank, controlled, untrimmed, or over-30-character values.
 
 ## Database design
 

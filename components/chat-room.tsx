@@ -24,17 +24,16 @@ import {
   Volume2,
   X,
 } from "lucide-react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { AmbientBackground } from "@/components/ambient-background";
+import { useGuestProfile } from "@/components/guest-profile-provider";
 import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { GlassCard } from "@/components/ui/glass-card";
 import { useRoomChat } from "@/hooks/use-room-chat";
 import { useSessionHeartbeat } from "@/hooks/use-session-heartbeat";
 import { useWebRTC } from "@/hooks/use-webrtc";
-import { getLocalProfile } from "@/lib/session";
 import { cn, initials } from "@/lib/utils";
 import type { AnonymousProfile, ChatMessage, CommunicationMode, LiveRoomContext, ReportReason } from "@/types";
 
@@ -241,7 +240,7 @@ function RoomChatPanel({ profile, partner, messages, partnerTyping, draft, compa
 
 export function ChatRoom({ roomId }: { roomId: string }) {
   const router = useRouter();
-  const [profile, setProfile] = useState<AnonymousProfile | null>(null);
+  const { profile, isLoaded, clearProfile } = useGuestProfile();
   const [liveRoom, setLiveRoom] = useState<LiveRoomContext | null>(null);
   const [roomError, setRoomError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -271,14 +270,13 @@ export function ChatRoom({ roomId }: { roomId: string }) {
   });
 
   useEffect(() => {
-    const stored = getLocalProfile();
-    if (!stored) {
+    if (!isLoaded) return;
+    if (!profile) {
       router.replace("/start");
       return;
     }
     let active = true;
     void (async () => {
-      setProfile(stored);
       try {
         const response = await fetch(`/api/rooms/${encodeURIComponent(roomId)}`, { cache: "no-store" });
         const data = await response.json() as LiveRoomContext & { error?: string };
@@ -289,7 +287,7 @@ export function ChatRoom({ roomId }: { roomId: string }) {
       }
     })();
     return () => { active = false; };
-  }, [roomId, router]);
+  }, [isLoaded, profile, roomId, router]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -316,6 +314,13 @@ export function ChatRoom({ roomId }: { roomId: string }) {
     router.replace("/matching");
   }
 
+  async function exitGuestSession() {
+    if (liveRoom?.mode !== "text") await media.endConnection("call-ended");
+    await fetch("/api/presence/offline", { method: "POST", keepalive: true }).catch(() => undefined);
+    clearProfile();
+    router.replace("/start");
+  }
+
   async function submitReport(reason: ReportReason) {
     if (!liveRoom) return;
     const response = await fetch("/api/reports", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ roomId, reportedUserId: liveRoom.partner.id, reason }) }).catch(() => null);
@@ -340,7 +345,7 @@ export function ChatRoom({ roomId }: { roomId: string }) {
     return <main className="app-page grid min-h-screen place-items-center px-5"><AmbientBackground /><GlassCard className="relative max-w-md rounded-[28px] p-8 text-center"><X className="mx-auto size-7 text-rose-300" /><h1 className="mt-5 font-display text-3xl font-bold">Room unavailable</h1><p className="mt-3 text-sm leading-6 text-white/40">{roomError}</p><Button className="mt-6" onClick={() => router.replace("/matching")}>Return to matching</Button></GlassCard></main>;
   }
 
-  if (!profile || !liveRoom) {
+  if (!isLoaded || !profile || !liveRoom) {
     return <main className="app-page grid min-h-screen place-items-center"><AmbientBackground /><div className="flex items-center gap-3 text-sm font-bold text-white/45"><span className="status-dot" /> Loading your conversation...</div></main>;
   }
 
@@ -461,8 +466,9 @@ export function ChatRoom({ roomId }: { roomId: string }) {
                 {['😕', '🙂', '✨'].map((emoji) => <button key={emoji} className="glass-subtle grid size-12 place-items-center rounded-2xl text-xl transition hover:-translate-y-1 hover:bg-white/[0.08]">{emoji}</button>)}
               </div>
               <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
-                <Button onClick={() => router.push("/matching")} size="lg"><RotateCcw className="size-4" /> Find someone new</Button>
-                <Button asChild variant="secondary" size="lg"><Link href="/">Back home</Link></Button>
+                <Button onClick={() => router.push("/matching")} size="lg"><RotateCcw className="size-4" /> Find someone else</Button>
+                <Button onClick={() => router.push("/start")} variant="secondary" size="lg">Change mode</Button>
+                <Button onClick={() => void exitGuestSession()} variant="ghost" size="lg" className="text-white/40 hover:text-rose-200">Exit</Button>
               </div>
             </motion.div>
           </motion.div>

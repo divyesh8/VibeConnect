@@ -9,7 +9,12 @@ create table if not exists public.online_users (
   id uuid primary key references auth.users(id) on delete cascade,
   session_id uuid not null unique,
   session_token_hash text not null unique,
-  username text not null check (username ~ '^[A-Za-z0-9_-]{3,20}$'),
+  username text not null check (
+    char_length(username) between 1 and 30
+    and username = btrim(username)
+    and username ~ '[^[:space:]]'
+    and username !~ '[[:cntrl:]]'
+  ),
   gender text not null check (gender in ('male', 'female', 'other')),
   communication_mode text not null check (communication_mode in ('text', 'voice', 'video')),
   interests jsonb not null default '[]'::jsonb check (jsonb_typeof(interests) = 'array'),

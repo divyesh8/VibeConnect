@@ -4,29 +4,20 @@ import { motion } from "framer-motion";
 import { ArrowLeft, ArrowRight, Clock3, Fingerprint, LogOut, ShieldCheck, Sparkles, UserRound } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
 import { AmbientBackground } from "@/components/ambient-background";
+import { useGuestProfile } from "@/components/guest-profile-provider";
 import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { GlassCard } from "@/components/ui/glass-card";
-import { clearLocalProfile, getLocalProfile } from "@/lib/session";
 import { initials } from "@/lib/utils";
-import type { AnonymousProfile } from "@/types";
 
 export function TemporaryProfile() {
   const router = useRouter();
-  const [profile, setProfile] = useState<AnonymousProfile | null>(null);
-  const [loaded, setLoaded] = useState(false);
+  const { profile, isLoaded, clearProfile } = useGuestProfile();
 
-  useEffect(() => {
-    queueMicrotask(() => {
-      setProfile(getLocalProfile());
-      setLoaded(true);
-    });
-  }, []);
-
-  function reset() {
-    clearLocalProfile();
+  async function reset() {
+    await fetch("/api/presence/offline", { method: "POST", keepalive: true }).catch(() => undefined);
+    clearProfile();
     router.push("/start");
   }
 
@@ -35,7 +26,7 @@ export function TemporaryProfile() {
       <AmbientBackground />
       <header className="mx-auto flex w-full max-w-[980px] items-center justify-between"><Logo /><Button asChild variant="ghost" size="sm"><Link href="/"><ArrowLeft className="size-4" /> Home</Link></Button></header>
       <div className="mx-auto flex min-h-[calc(100vh-100px)] w-full max-w-[760px] items-center justify-center py-12">
-        {loaded && !profile ? (
+        {isLoaded && !profile ? (
           <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} className="text-center">
             <div className="mx-auto grid size-20 place-items-center rounded-[26px] border border-white/10 bg-white/[0.05]"><UserRound className="size-7 text-white/45" /></div>
             <h1 className="mt-7 font-display text-4xl font-semibold tracking-[-.055em]">No active vibe yet.</h1>
@@ -62,7 +53,7 @@ export function TemporaryProfile() {
                 <div className="glass-subtle rounded-2xl p-4"><Clock3 className="size-4 text-[#b294ff]" /><p className="mt-3 text-[10px] font-bold text-white/28">Created</p><p className="mt-1 text-xs font-bold text-white/55">{new Date(profile.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p></div>
                 <div className="glass-subtle rounded-2xl p-4"><ShieldCheck className="size-4 text-[#ff83c4]" /><p className="mt-3 text-[10px] font-bold text-white/28">Media storage</p><p className="mt-1 text-xs font-bold text-white/55">Always off</p></div>
               </div>
-              <div className="flex flex-col-reverse gap-3 border-t border-white/[0.07] pt-5 sm:flex-row sm:justify-between"><Button variant="danger" onClick={reset}><LogOut className="size-4" /> Reset profile</Button><Button asChild><Link href="/matching">Start matching <ArrowRight className="size-4" /></Link></Button></div>
+              <div className="flex flex-col-reverse gap-3 border-t border-white/[0.07] pt-5 sm:flex-row sm:justify-between"><Button variant="danger" onClick={() => void reset()}><LogOut className="size-4" /> Exit / reset profile</Button><Button asChild><Link href="/matching">Start matching <ArrowRight className="size-4" /></Link></Button></div>
             </GlassCard>
           </motion.div>
         ) : null}

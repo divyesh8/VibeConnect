@@ -154,3 +154,80 @@ test("landing and setup source retain the primary user journey", async () => {
   assert.match(setup, /Tell us the basics/);
   assert.match(setup, /Find someone/);
 });
+
+test("guest profile is centralized and persists for the browser-tab session", async () => {
+  const [layout, provider, storage, setup, matching, room, profilePage] = await Promise.all([
+    readFile(new URL("app/layout.tsx", root), "utf8"),
+    readFile(new URL("components/guest-profile-provider.tsx", root), "utf8"),
+    readFile(new URL("lib/session.ts", root), "utf8"),
+    readFile(new URL("components/setup-form.tsx", root), "utf8"),
+    readFile(new URL("components/matching-experience.tsx", root), "utf8"),
+    readFile(new URL("components/chat-room.tsx", root), "utf8"),
+    readFile(new URL("components/temporary-profile.tsx", root), "utf8"),
+  ]);
+  assert.match(layout, /<GuestProfileProvider>\{children\}<\/GuestProfileProvider>/);
+  assert.match(storage, /vibeconnect_guest_profile/);
+  assert.match(storage, /window\.sessionStorage/);
+  assert.doesNotMatch(storage, /localStorage/);
+  assert.match(provider, /saveLocalProfile\(nextProfile\)/);
+  assert.match(provider, /updateProfile/);
+  assert.match(setup, /profile \? "Ready to meet someone new\?" : "Tell us the basics"/);
+  assert.match(setup, /method: "PATCH"/);
+  assert.match(matching, /useGuestProfile\(\)/);
+  assert.doesNotMatch(matching, /getLocalProfile/);
+  assert.match(room, /router\.replace\("\/matching"\)/);
+  assert.match(room, /Find someone else/);
+  assert.match(room, /Change mode/);
+  assert.match(profilePage, /Exit \/ reset profile/);
+});
+
+test("display names preserve case, spaces, symbols, and Unicode", async () => {
+  const { displayNameValidationError, trimDisplayName } = await import(new URL("../lib/display-name.ts", import.meta.url));
+  const validNames = [
+    "Divyesh",
+    "DIVYESH",
+    "Divyesh Kolli",
+    "Mr. Divyesh :)",
+    "D@rk Knight",
+    "₹Divyesh",
+    "★ Divyesh ★",
+    "X Æ A-12",
+    "李 小龍",
+  ];
+  for (const name of validNames) {
+    assert.equal(displayNameValidationError(name), null, name);
+    assert.equal(trimDisplayName(name), name, name);
+  }
+  assert.equal(trimDisplayName("   Divyesh Kolli   "), "Divyesh Kolli");
+  assert.notEqual(displayNameValidationError("     "), null);
+  assert.notEqual(displayNameValidationError("Divyesh\u0000"), null);
+  assert.notEqual(displayNameValidationError("x".repeat(31)), null);
+});
+
+test("client, API, and database share permissive display-name limits", async () => {
+  const [setup, validation, schema, migration, sessionRoute, allComponents] = await Promise.all([
+    readFile(new URL("components/setup-form.tsx", root), "utf8"),
+    readFile(new URL("lib/validation.ts", root), "utf8"),
+    readFile(new URL("supabase/schema.sql", root), "utf8"),
+    readFile(new URL("supabase/migrations/006_permissive_display_names.sql", root), "utf8"),
+    readFile(new URL("app/api/session/route.ts", root), "utf8"),
+    sourceFiles(new URL("components/", root)).then(async (files) => (await Promise.all(files.filter((file) => /\.tsx$/.test(file.pathname)).map((file) => readFile(file, "utf8")))).join("\n")),
+  ]);
+  assert.match(setup, /slice\(0, 30\)/);
+  assert.doesNotMatch(setup, /toLowerCase\(|\^\[a-zA-Z0-9_/);
+  assert.match(validation, /displayNameSchema/);
+  assert.match(sessionRoute, /username: parsed\.data\.username/);
+  assert.match(schema, /char_length\(username\) between 1 and 30/);
+  assert.doesNotMatch(schema, /username ~ '\^\[A-Za-z0-9_/);
+  assert.match(migration, /drop constraint if exists online_users_username_check/);
+  assert.doesNotMatch(allComponents, /dangerouslySetInnerHTML/);
+});
+
+test("mode changes update preferences without changing guest identity", async () => {
+  const route = await readFile(new URL("app/api/session/route.ts", root), "utf8");
+  const patchHandler = route.slice(route.indexOf("export async function PATCH"));
+  assert.match(patchHandler, /communication_mode: parsed\.data\.mode/);
+  assert.match(patchHandler, /interests: parsed\.data\.interests/);
+  assert.doesNotMatch(patchHandler, /username:/);
+  assert.doesNotMatch(patchHandler, /gender:/);
+});

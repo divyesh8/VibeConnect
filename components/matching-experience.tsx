@@ -3,15 +3,15 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { Check, Headphones, MessageCircleMore, ShieldCheck, UserCheck, Video, X } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { AmbientBackground } from "@/components/ambient-background";
+import { useGuestProfile } from "@/components/guest-profile-provider";
 import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { GlassCard } from "@/components/ui/glass-card";
 import { useQueuePresence } from "@/hooks/use-queue-presence";
-import { getLocalProfile } from "@/lib/session";
 import { formatDuration, initials } from "@/lib/utils";
-import type { AnonymousProfile, MatchProposalStatus, MatchResult } from "@/types";
+import type { MatchProposalStatus, MatchResult } from "@/types";
 
 const modeIcon = { text: MessageCircleMore, voice: Headphones, video: Video };
 type MatchPhase = "searching" | "proposal" | "accepted" | "connecting" | "error";
@@ -19,7 +19,7 @@ type RealPartner = { id: string; username: string; interests: string[] };
 
 export function MatchingExperience() {
   const router = useRouter();
-  const [profile, setProfile] = useState<AnonymousProfile | null>(null);
+  const { profile, isLoaded } = useGuestProfile();
   const [seconds, setSeconds] = useState(0);
   const [phase, setPhase] = useState<MatchPhase>("searching");
   const [proposalId, setProposalId] = useState<string | null>(null);
@@ -29,10 +29,8 @@ export function MatchingExperience() {
   const presence = useQueuePresence(profile, phase === "searching" ? "searching" : "confirming", phase !== "error" && phase !== "connecting");
 
   useEffect(() => {
-    const stored = getLocalProfile();
-    if (!stored) router.replace("/start");
-    else queueMicrotask(() => setProfile(stored));
-  }, [router]);
+    if (isLoaded && !profile) router.replace("/start");
+  }, [isLoaded, profile, router]);
 
   useEffect(() => {
     if (phase !== "searching") return;
@@ -160,13 +158,17 @@ export function MatchingExperience() {
     router.push("/start");
   }
 
-  const ModeIcon = useMemo(() => modeIcon[profile?.mode ?? "text"], [profile?.mode]);
+  const ModeIcon = modeIcon[profile?.mode ?? "text"];
   const queueCopy = presence.presenceConnected
     ? presence.liveSearchingSessions <= 1
       ? "You’re the only live person in this mode right now."
       : `${presence.liveSearchingSessions} real people are live in this mode.`
     : "Waiting for another real person to join.";
   const sharedInterests = partner && profile ? partner.interests.filter((interest) => profile.interests.includes(interest)) : [];
+
+  if (!isLoaded || !profile) {
+    return <main className="app-page grid min-h-screen place-items-center"><AmbientBackground /><div className="flex items-center gap-3 text-sm font-bold text-white/45"><span className="status-dot" /> Restoring your temporary profile...</div></main>;
+  }
 
   return (
     <main className="app-page flex min-h-screen flex-col px-5 py-6 sm:px-8">

@@ -1,6 +1,6 @@
 # Deployment
 
-1. Create a Supabase project and run `supabase/schema.sql` in the SQL editor. For an existing database, apply migrations `002_real_human_only_matching.sql`, `003_anonymous_auth_control_plane.sql`, and `004_webrtc_room_hardening.sql` in that order.
+1. Create a Supabase project and run `supabase/schema.sql` in the SQL editor. For an existing database, apply the numbered migrations in order through `006_permissive_display_names.sql`.
 2. Copy `.env.example` to `.env.local` and fill the Supabase URL, publishable key, secret key, a long random admin token, and optionally an OpenAI API key. Legacy anon and service-role key names remain supported. `SUPABASE_JWT_SECRET` is needed only by the legacy custom Realtime-token endpoints.
 3. Confirm Realtime is enabled for `public.messages`. The schema adds it to the publication and creates private channel policies.
 4. Import the repository into Vercel. Select the **Next.js** framework preset, use the repository root, and leave Output Directory blank. The committed `vercel.json` and native `next build` script prevent the project from being treated as a static `dist` deployment.

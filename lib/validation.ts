@@ -1,11 +1,23 @@
 import { z } from "zod";
+import { DISPLAY_NAME_MAX_LENGTH, hasControlCharacters, trimDisplayName } from "@/lib/display-name";
+
+export const displayNameSchema = z.string()
+  .transform(trimDisplayName)
+  .refine((value) => Array.from(value).length >= 1, "Enter at least one visible character.")
+  .refine((value) => Array.from(value).length <= DISPLAY_NAME_MAX_LENGTH, `Keep your display name to ${DISPLAY_NAME_MAX_LENGTH} characters or fewer.`)
+  .refine((value) => !hasControlCharacters(value), "Control characters are not allowed.");
 
 export const sessionSchema = z.object({
-  username: z.string().trim().min(3).max(20).regex(/^[a-zA-Z0-9_-]+$/),
+  username: displayNameSchema,
   gender: z.enum(["male", "female", "other"]),
   mode: z.enum(["text", "voice", "video"]),
   interests: z.array(z.string().trim().min(1).max(32)).max(5).default([]),
   botToken: z.string().max(2048).optional(),
+});
+
+export const profilePreferenceSchema = z.object({
+  mode: z.enum(["text", "voice", "video"]),
+  interests: z.array(z.string().trim().min(1).max(32)).max(5).default([]),
 });
 
 export const messageSchema = z.object({

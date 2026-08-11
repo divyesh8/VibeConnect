@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requestIp, allowDistributedRequest, sha256 } from "@/lib/server/security";
-import { SESSION_COOKIE } from "@/lib/server/session";
+import { getSessionUser, SESSION_COOKIE } from "@/lib/server/session";
 import { verifyTurnstile } from "@/lib/server/turnstile";
-import { sessionSchema } from "@/lib/validation";
+import { profilePreferenceSchema, sessionSchema } from "@/lib/validation";
 import { createServerSupabase } from "@/services/supabase";
 
 export async function POST(request: NextRequest) {
@@ -58,4 +58,29 @@ export async function POST(request: NextRequest) {
 
   response.cookies.set(SESSION_COOKIE, sessionToken, { httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "strict", path: "/", maxAge: 60 * 60 * 8 });
   return response;
+}
+
+export async function PATCH(request: NextRequest) {
+  const user = await getSessionUser(request);
+  if (!user) return NextResponse.json({ error: "Your temporary session expired. Reset the profile to start a new one." }, { status: 401 });
+  const parsed = profilePreferenceSchema.safeParse(await request.json().catch(() => null));
+  if (!parsed.success) return NextResponse.json({ error: "Invalid communication preferences." }, { status: 400 });
+  const supabase = createServerSupabase();
+  if (!supabase) return NextResponse.json({ error: "Live matching is not configured." }, { status: 503 });
+
+  const { data, error } = await supabase
+    .from("online_users")
+    .update({
+      communication_mode: parsed.data.mode,
+      interests: parsed.data.interests,
+      status: "searching",
+      last_seen: new Date().toISOString(),
+    })
+    .eq("id", user.id)
+    .is("current_room_id", null)
+    .select("id")
+    .maybeSingle();
+  if (error) return NextResponse.json({ error: "Your communication preferences could not be updated." }, { status: 503 });
+  if (!data) return NextResponse.json({ error: "End the current conversation before changing modes." }, { status: 409 });
+  return NextResponse.json({ updated: true, mode: parsed.data.mode, interests: parsed.data.interests });
 }

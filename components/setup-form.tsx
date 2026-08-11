@@ -6,6 +6,7 @@ import {
   ArrowRight,
   Camera,
   Check,
+  LogOut,
   MessageCircleMore,
   Mic2,
   ShieldCheck,
@@ -19,8 +20,9 @@ import { AmbientBackground } from "@/components/ambient-background";
 import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { GlassCard } from "@/components/ui/glass-card";
+import { useGuestProfile } from "@/components/guest-profile-provider";
 import { GENDERS, INTERESTS, MODES } from "@/lib/constants";
-import { saveLocalProfile } from "@/lib/session";
+import { displayNameSchema } from "@/lib/validation";
 import { ensureAnonymousAuth } from "@/services/supabase";
 import { cn } from "@/lib/utils";
 import type { AnonymousProfile, CommunicationMode, Gender } from "@/types";
@@ -33,6 +35,7 @@ const modeIcons = {
 
 export function SetupForm() {
   const router = useRouter();
+  const { profile, isLoaded, setProfile, updateProfile, clearProfile } = useGuestProfile();
   const [username, setUsername] = useState("");
   const [gender, setGender] = useState<Gender | null>(null);
   const [mode, setMode] = useState<CommunicationMode>("text");
@@ -42,6 +45,14 @@ export function SetupForm() {
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
+
+  useEffect(() => {
+    if (!profile) return;
+    queueMicrotask(() => {
+      setMode(profile.mode);
+      setInterests(profile.interests);
+    });
+  }, [profile]);
 
   useEffect(() => {
     const browserWindow = window as typeof window & {
@@ -69,45 +80,59 @@ export function SetupForm() {
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
     setError("");
-    const cleanUsername = username.trim();
-    if (cleanUsername.length < 3) {
-      setError("Your nickname needs at least 3 characters.");
-      return;
-    }
-    if (!/^[a-zA-Z0-9_-]+$/.test(cleanUsername)) {
-      setError("Use letters, numbers, underscores, or dashes only.");
-      return;
-    }
-    if (!gender) {
-      setError("Choose the option that feels right for you.");
-      return;
-    }
-    if (!ageConfirmed) {
-      setError("You must confirm that you are 18 or older to continue.");
-      return;
-    }
-    if (turnstileSiteKey && !botToken) {
-      setError("Complete the anti-bot check before continuing.");
-      return;
-    }
 
     setSubmitting(true);
     try {
+      if (profile) {
+        const response = await fetch("/api/session", {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ mode, interests }),
+        });
+        const data = await response.json() as { error?: string };
+        if (!response.ok) throw new Error(data.error ?? "Your session preferences could not be updated.");
+        updateProfile({ mode, interests });
+        router.push("/matching");
+        return;
+      }
+
+      const parsedName = displayNameSchema.safeParse(username);
+      if (!parsedName.success) {
+        throw new Error(parsedName.error.issues[0]?.message ?? "Enter a valid display name.");
+      }
+      if (!gender) throw new Error("Choose the option that feels right for you.");
+      if (!ageConfirmed) throw new Error("You must confirm that you are 18 or older to continue.");
+      if (turnstileSiteKey && !botToken) throw new Error("Complete the anti-bot check before continuing.");
+
       const authSession = await ensureAnonymousAuth();
       const response = await fetch("/api/session", {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${authSession.access_token}` },
-        body: JSON.stringify({ username: cleanUsername, gender, mode, interests, botToken: botToken || undefined }),
+        body: JSON.stringify({ username: parsedName.data, gender, mode, interests, botToken: botToken || undefined }),
       });
       const data = await response.json() as { profile?: AnonymousProfile; error?: string };
       if (!response.ok || !data.profile) throw new Error(data.error ?? "Live matching is unavailable.");
-      const profile = data.profile;
-      saveLocalProfile(profile);
+      setProfile(data.profile);
       router.push("/matching");
     } catch (submissionError) {
       setError(submissionError instanceof Error ? submissionError.message : "Live matching is unavailable. Please try again shortly.");
       setSubmitting(false);
     }
+  }
+
+  async function resetGuestProfile() {
+    await fetch("/api/presence/offline", { method: "POST", keepalive: true }).catch(() => undefined);
+    clearProfile();
+    setUsername("");
+    setGender(null);
+    setMode("text");
+    setInterests([]);
+    setAgeConfirmed(false);
+    setError("");
+  }
+
+  if (!isLoaded) {
+    return <main className="app-page grid min-h-screen place-items-center"><AmbientBackground /><div className="flex items-center gap-3 text-sm font-bold text-white/45"><span className="status-dot" /> Restoring your temporary profile...</div></main>;
   }
 
   return (
@@ -151,8 +176,8 @@ export function SetupForm() {
           <GlassCard className="rounded-[32px] p-5 sm:p-8 lg:min-h-[680px] lg:p-10">
             <div className="mb-8 flex items-center justify-between">
               <div>
-                <p className="text-[10px] font-extrabold uppercase tracking-[.18em] text-[#8df6e1]">Step 01 of 03</p>
-                <h2 className="mt-2 font-display text-2xl font-bold tracking-[-.045em] sm:text-3xl">Tell us the basics</h2>
+                <p className="text-[10px] font-extrabold uppercase tracking-[.18em] text-[#8df6e1]">{profile ? "Your session is active" : "Step 01 of 03"}</p>
+                <h2 className="mt-2 font-display text-2xl font-bold tracking-[-.045em] sm:text-3xl">{profile ? "Ready to meet someone new?" : "Tell us the basics"}</h2>
               </div>
               <Button asChild variant="ghost" size="icon" aria-label="Back home">
                 <Link href="/"><ArrowLeft className="size-4" /></Link>
@@ -160,49 +185,58 @@ export function SetupForm() {
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-7">
-              <div>
-                <label htmlFor="username" className="mb-2.5 block text-xs font-extrabold text-white/70">Your nickname</label>
-                <div className="relative">
-                  <input
-                    id="username"
-                    value={username}
-                    onChange={(event) => setUsername(event.target.value.slice(0, 20))}
-                    placeholder="3–20 characters"
-                    autoComplete="off"
-                    className="h-13 w-full rounded-2xl border border-white/10 bg-black/20 px-4 pr-16 text-sm font-semibold text-white outline-none transition placeholder:text-white/20 focus:border-[#78f7df]/45 focus:ring-4 focus:ring-[#78f7df]/[0.07]"
-                  />
-                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-[10px] font-bold text-white/20">{username.length}/20</span>
+              {profile ? (
+                <div className="flex flex-col gap-3 rounded-2xl border border-[#78f7df]/15 bg-[#78f7df]/[0.05] p-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div><p className="text-sm font-extrabold text-white">{profile.username}</p><p className="mt-1 text-[10px] capitalize text-white/35">{profile.gender} · temporary profile</p></div>
+                  <Button type="button" variant="ghost" size="sm" onClick={() => void resetGuestProfile()} className="text-white/40 hover:text-rose-200"><LogOut className="size-3.5" /> Exit / reset profile</Button>
                 </div>
-              </div>
+              ) : (
+                <>
+                  <div>
+                    <label htmlFor="username" className="mb-2.5 block text-xs font-extrabold text-white/70">Your display name</label>
+                    <div className="relative">
+                      <input
+                        id="username"
+                        value={username}
+                        onChange={(event) => setUsername(Array.from(event.target.value).slice(0, 30).join(""))}
+                        placeholder="1–30 characters"
+                        autoComplete="nickname"
+                        className="h-13 w-full rounded-2xl border border-white/10 bg-black/20 px-4 pr-16 text-sm font-semibold text-white outline-none transition placeholder:text-white/20 focus:border-[#78f7df]/45 focus:ring-4 focus:ring-[#78f7df]/[0.07]"
+                      />
+                      <span className="absolute right-4 top-1/2 -translate-y-1/2 text-[10px] font-bold text-white/20">{Array.from(username).length}/30</span>
+                    </div>
+                  </div>
 
-              <fieldset>
-                <legend className="mb-2.5 text-xs font-extrabold text-white/70">Gender</legend>
-                <div className="grid grid-cols-3 gap-2">
-                  {GENDERS.map((item) => (
-                    <button
-                      key={item.value}
-                      type="button"
-                      onClick={() => setGender(item.value)}
-                      className={cn(
-                        "relative min-h-12 rounded-2xl border px-3 py-2 text-xs font-bold transition",
-                        gender === item.value
-                          ? "border-[#78f7df]/45 bg-[#78f7df]/10 text-white"
-                          : "border-white/[0.08] bg-white/[0.035] text-white/42 hover:border-white/15 hover:text-white/75",
-                      )}
-                    >
-                      {gender === item.value && <Check className="absolute right-2 top-2 size-3 text-[#78f7df]" />}
-                      {item.label}
-                    </button>
-                  ))}
-                </div>
-              </fieldset>
+                  <fieldset>
+                    <legend className="mb-2.5 text-xs font-extrabold text-white/70">Gender</legend>
+                    <div className="grid grid-cols-3 gap-2">
+                      {GENDERS.map((item) => (
+                        <button
+                          key={item.value}
+                          type="button"
+                          onClick={() => setGender(item.value)}
+                          className={cn(
+                            "relative min-h-12 rounded-2xl border px-3 py-2 text-xs font-bold transition",
+                            gender === item.value
+                              ? "border-[#78f7df]/45 bg-[#78f7df]/10 text-white"
+                              : "border-white/[0.08] bg-white/[0.035] text-white/42 hover:border-white/15 hover:text-white/75",
+                          )}
+                        >
+                          {gender === item.value && <Check className="absolute right-2 top-2 size-3 text-[#78f7df]" />}
+                          {item.label}
+                        </button>
+                      ))}
+                    </div>
+                  </fieldset>
 
-              <div className="flex items-start gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-4">
-                <input id="age-confirmation" type="checkbox" checked={ageConfirmed} onChange={(event) => setAgeConfirmed(event.target.checked)} className="mt-0.5 size-4 accent-[#78f7df]" />
-                <div><label htmlFor="age-confirmation" className="cursor-pointer text-xs font-extrabold text-white/72">I am 18 or older</label><span className="mt-1 block text-[10px] leading-4 text-white/32">Stranger conversations can be unpredictable. Minors may not use this service.</span></div>
-              </div>
+                  <div className="flex items-start gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-4">
+                    <input id="age-confirmation" type="checkbox" checked={ageConfirmed} onChange={(event) => setAgeConfirmed(event.target.checked)} className="mt-0.5 size-4 accent-[#78f7df]" />
+                    <div><label htmlFor="age-confirmation" className="cursor-pointer text-xs font-extrabold text-white/72">I am 18 or older</label><span className="mt-1 block text-[10px] leading-4 text-white/32">Stranger conversations can be unpredictable. Minors may not use this service.</span></div>
+                  </div>
+                </>
+              )}
 
-              {turnstileSiteKey && (
+              {!profile && turnstileSiteKey && (
                 <div className="rounded-2xl border border-white/[0.08] bg-white/[0.025] p-3">
                   <Script src="https://challenges.cloudflare.com/turnstile/v0/api.js" strategy="afterInteractive" />
                   <div className="cf-turnstile" data-sitekey={turnstileSiteKey} data-theme="dark" data-size="flexible" data-action="create-session" data-callback="onVibeConnectTurnstile" data-expired-callback="onVibeConnectTurnstileExpired" />
@@ -273,7 +307,7 @@ export function SetupForm() {
               <div className="flex flex-col gap-3 border-t border-white/[0.07] pt-5 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-[10px] leading-4 text-white/26"><ShieldCheck className="mr-1 inline size-3 text-[#78f7df]" /> Friendly conversations only</p>
                 <Button type="submit" size="lg" disabled={submitting} className="group sm:min-w-48">
-                  {submitting ? "Creating your vibe..." : "Find someone"}
+                  {submitting ? (profile ? "Updating your mode..." : "Creating your vibe...") : "Find someone"}
                   {!submitting && <ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />}
                 </Button>
               </div>

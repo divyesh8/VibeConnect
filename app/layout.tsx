@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Manrope, Space_Grotesk } from "next/font/google";
+import { GuestProfileProvider } from "@/components/guest-profile-provider";
 import "./globals.css";
 
 const manrope = Manrope({
@@ -46,7 +47,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${manrope.variable} ${spaceGrotesk.variable}`}>
-        {children}
+        <GuestProfileProvider>{children}</GuestProfileProvider>
       </body>
     </html>
   );
