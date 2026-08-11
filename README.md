@@ -23,7 +23,7 @@ copy .env.example .env.local
 npm run dev
 ```
 
-Supabase configuration is required for sessions, matching, rooms, messages, presence, and admin data. When live infrastructure is unavailable, the application shows an error and never creates a simulated user, conversation, or match.
+Supabase configuration is required for sessions, matching, rooms, messages, presence, and admin data. The app supports the current Vercel Marketplace names (`NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, and `SUPABASE_URL`) as well as the legacy anon/service-role names. When live infrastructure is unavailable, the application shows an error and never creates a simulated user, conversation, or match.
 
 ## Vercel deployment
 

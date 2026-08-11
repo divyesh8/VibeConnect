@@ -5,7 +5,8 @@ let browserClient: SupabaseClient | null | undefined;
 export function getBrowserSupabase() {
   if (browserClient !== undefined) return browserClient;
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+    || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   browserClient = url && anonKey
     ? createClient(url, anonKey, {
         auth: { persistSession: false, autoRefreshToken: false },
@@ -16,8 +17,10 @@ export function getBrowserSupabase() {
 }
 
 export function createServerSupabase() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const url = process.env.SUPABASE_URL
+    || process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SECRET_KEY
+    || process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !serviceKey) return null;
   return createClient(url, serviceKey, {
     auth: { persistSession: false, autoRefreshToken: false },

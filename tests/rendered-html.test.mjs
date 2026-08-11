@@ -46,6 +46,15 @@ test("database schema requires live two-person acceptance", async () => {
   assert.doesNotMatch(schema, /create or replace function public\.match_anonymous_user/);
 });
 
+test("Supabase client accepts current Vercel Marketplace variable names", async () => {
+  const source = await readFile(new URL("services/supabase.ts", root), "utf8");
+  assert.match(source, /NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY/);
+  assert.match(source, /SUPABASE_SECRET_KEY/);
+  assert.match(source, /SUPABASE_URL/);
+  assert.match(source, /NEXT_PUBLIC_SUPABASE_ANON_KEY/);
+  assert.match(source, /SUPABASE_SERVICE_ROLE_KEY/);
+});
+
 test("landing and setup source retain the primary user journey", async () => {
   const [landing, setup] = await Promise.all([
     readFile(new URL("components/landing-page.tsx", root), "utf8"),
