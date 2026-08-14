@@ -6,7 +6,7 @@ import { leaveRoomChannel, sendSignal, subscribeToRoom, type SignalPayload } fro
 import type { CommunicationMode, WebRTCDiagnostics, WebRTCPhase, WebRTCTimeline } from "@/types";
 import { PeerManager, type PeerMilestone, type PeerSignal } from "@/webrtc/peer-manager";
 
-type IceServerResponse = { iceServers?: RTCIceServer[]; forceRelay?: boolean; error?: string };
+type IceServerResponse = { iceServers?: RTCIceServer[]; forceRelay?: boolean; turnConfigured?: boolean; error?: string };
 type MediaStatus = "idle" | "requesting" | "ready" | "error";
 type MediaPermissionStatus = "unknown" | "granted" | "denied";
 type SignalProgress = "not-sent" | "sent" | "received";
@@ -115,6 +115,7 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
   const remoteReadyRef = useRef(false);
   const offerStartedRef = useRef(false);
   const connectedPostedRef = useRef(false);
+  const turnConfiguredRef = useRef(false);
   const restartAttemptsRef = useRef(0);
   const pendingBeforePeerRef = useRef<RTCIceCandidateInit[]>([]);
   const seenNoncesRef = useRef(new Set<string>());
@@ -199,7 +200,9 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
     connectionTimerRef.current = window.setTimeout(() => {
       if (peerRef.current?.connection.connectionState === "connected") return;
       setPhase("failed");
-      setError("We couldn't establish the call. Check your network or try another person.");
+      setError(turnConfiguredRef.current
+        ? "We couldn't establish the call. Check your network or try another person."
+        : "This deployment has no TURN relay configured, so calls between mobile and Wi-Fi networks may not connect. Configure TURN and try again.");
     }, CONNECTION_TIMEOUT_MS);
   }, [clearTimer]);
 
@@ -312,6 +315,7 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
     remoteReadyRef.current = false;
     offerStartedRef.current = false;
     connectedPostedRef.current = false;
+    turnConfiguredRef.current = false;
     restartAttemptsRef.current = 0;
     pendingBeforePeerRef.current = [];
     seenNoncesRef.current.clear();
@@ -540,6 +544,7 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
         if (!signalingChannel || !channelRef.current) throw new Error("The private signaling channel is not ready yet. Try again in a moment.");
         const iceData = await iceResponse.json() as IceServerResponse;
         if (!iceResponse.ok || !iceData.iceServers?.length) throw new Error(iceData.error ?? "WebRTC network configuration is unavailable.");
+        turnConfiguredRef.current = Boolean(iceData.turnConfigured);
 
         const peer = createPeer(iceData.iceServers, Boolean(iceData.forceRelay));
         if (!peer.connection.getSenders().some((sender) => sender.track)) await peer.addLocalStream(stream, mode === "video");

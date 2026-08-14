@@ -25,9 +25,15 @@ export async function connectQueuePresence(
 
   channel.on("presence", { event: "sync" }, () => {
     const state = channel.presenceState<{ user_id: string; status: string }>();
-    const liveSearchingSessions = Object.values(state)
-      .flat()
-      .filter((presence) => presence.status === "searching").length;
+    // Reconnects can briefly leave more than one Presence meta for one key.
+    // Count authenticated user IDs, not metas, so one browser is never shown
+    // as two available people.
+    const liveSearchingSessions = new Set(
+      Object.values(state)
+        .flat()
+        .filter((presence) => presence.status === "searching")
+        .map((presence) => presence.user_id),
+    ).size;
     onSync(liveSearchingSessions);
   });
 

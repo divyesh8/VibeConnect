@@ -268,12 +268,6 @@ begin
       where (block_row.blocker_id = requester.id and block_row.blocked_id = candidate_row.id)
          or (block_row.blocker_id = candidate_row.id and block_row.blocked_id = requester.id)
     )
-    and not exists (
-      select 1 from public.chat_rooms recent
-      where recent.created_at > now() - interval '24 hours'
-        and ((recent.user1_id = requester.id and recent.user2_id = candidate_row.id)
-          or (recent.user1_id = candidate_row.id and recent.user2_id = requester.id))
-    )
   order by
     case
       when (requester.gender = 'male' and candidate_row.gender = 'female')
@@ -281,6 +275,12 @@ begin
       when requester.gender = candidate_row.gender then 1
       else 2
     end,
+    exists (
+      select 1 from public.chat_rooms recent
+      where recent.created_at > now() - interval '24 hours'
+        and ((recent.user1_id = requester.id and recent.user2_id = candidate_row.id)
+          or (recent.user1_id = candidate_row.id and recent.user2_id = requester.id))
+    ) asc,
     candidate_row.created_at asc
   limit 1
   for update of candidate_row skip locked;

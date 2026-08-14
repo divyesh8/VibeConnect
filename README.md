@@ -38,7 +38,7 @@ Add the variables from [`.env.example`](.env.example), then redeploy. If the Ver
 
 ## Production data setup
 
-Run [`supabase/schema.sql`](supabase/schema.sql) in a new Supabase project. For an existing project, apply every numbered file in [`supabase/migrations`](supabase/migrations) in order through `008_another_vibe_safe_handoff.sql`. Configure the values from [`.env.example`](.env.example), and follow [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). The system design and audit are documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/WEBRTC_AUDIT.md`](docs/WEBRTC_AUDIT.md).
+Run [`supabase/schema.sql`](supabase/schema.sql) in a new Supabase project. For an existing project, apply every numbered file in [`supabase/migrations`](supabase/migrations) in order through `009_live_pairing_reconnect.sql`. Configure the values from [`.env.example`](.env.example), and follow [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). The system design and audit are documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/WEBRTC_AUDIT.md`](docs/WEBRTC_AUDIT.md).
 
 The optional `npm run build:sites` command preserves the existing Cloudflare/Sites package path; it is not the Vercel build command.
 

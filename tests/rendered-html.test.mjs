@@ -138,6 +138,25 @@ test("signaling is room-bound and waits for both media-ready peers", async () =>
   assert.doesNotMatch(env, /NEXT_PUBLIC_TURN_(?:URL|USERNAME|CREDENTIAL)=/);
 });
 
+test("queue presence and repeated two-person tests cannot create a false waiting state", async () => {
+  const [presence, room, hook, schema, migration] = await Promise.all([
+    readFile(new URL("services/presence.ts", root), "utf8"),
+    readFile(new URL("components/chat-room.tsx", root), "utf8"),
+    readFile(new URL("hooks/use-webrtc.ts", root), "utf8"),
+    readFile(new URL("supabase/schema.sql", root), "utf8"),
+    readFile(new URL("supabase/migrations/009_live_pairing_reconnect.sql", root), "utf8"),
+  ]);
+  assert.match(presence, /new Set\([\s\S]*presence\.user_id/);
+  assert.match(room, /void startMediaConnection\(\)/);
+  assert.match(hook, /turnConfiguredRef\.current/);
+  for (const sql of [schema, migration]) {
+    const matcher = sql.slice(sql.indexOf("create or replace function public.propose_real_match"), sql.indexOf("create or replace function public.accept_real_match"));
+    const candidateQuery = matcher.slice(matcher.indexOf("select candidate_row.* into candidate"), matcher.indexOf("if candidate.id is null"));
+    assert.doesNotMatch(candidateQuery.slice(0, candidateQuery.indexOf("order by")), /recent\.created_at/);
+    assert.match(candidateQuery, /order by[\s\S]*exists \([\s\S]*recent\.created_at[\s\S]*\) asc/);
+  }
+});
+
 test("local media preview is independent from Realtime subscription success", async () => {
   const [hook, realtime] = await Promise.all([
     readFile(new URL("hooks/use-webrtc.ts", root), "utf8"),

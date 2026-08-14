@@ -307,6 +307,7 @@ export function ChatRoom({ roomId }: { roomId: string }) {
     },
   });
   const endMediaConnection = media.endConnection;
+  const startMediaConnection = media.startMedia;
   const { messages, partnerTyping, sendMessage, announceTyping } = useRoomChat(roomId, !ended && liveRoom ? profile : null);
   useSessionHeartbeat(Boolean(liveRoom && !ended), () => {
     if (process.env.NODE_ENV === "development") console.info("[ROOM] Partner disconnected: heartbeat detected ended room");
@@ -335,6 +336,15 @@ export function ChatRoom({ roomId }: { roomId: string }) {
     })();
     return () => { active = false; };
   }, [isLoaded, profile, roomId, router]);
+
+  useEffect(() => {
+    if (!liveRoom || liveRoom.mode === "text" || ended || media.mediaStatus !== "idle") return;
+    // Both people explicitly accepted a video match before this page opened.
+    // Start capture on arrival so the call cannot wait forever for a second,
+    // easy-to-miss "Enable camera & mic" click. The button remains available
+    // when a browser denies or interrupts the permission request.
+    void startMediaConnection();
+  }, [ended, liveRoom, media.mediaStatus, startMediaConnection]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
