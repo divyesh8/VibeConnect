@@ -7,6 +7,7 @@ import type { CommunicationMode, WebRTCDiagnostics, WebRTCPhase, WebRTCTimeline 
 import { PeerManager, type PeerMilestone, type PeerSignal } from "@/webrtc/peer-manager";
 
 type IceServerResponse = { iceServers?: RTCIceServer[]; forceRelay?: boolean; turnConfigured?: boolean; turnProvider?: string; error?: string };
+type IceConfiguration = { iceServers: RTCIceServer[]; forceRelay: boolean; turnConfigured: boolean; turnProvider: string };
 type MediaStatus = "idle" | "requesting" | "ready" | "error";
 type MediaPermissionStatus = "unknown" | "granted" | "denied";
 type SignalProgress = "not-sent" | "sent" | "received";
@@ -77,6 +78,20 @@ async function requestLocalMedia(mode: CommunicationMode) {
       facingMode: "user",
     } : false,
   });
+}
+
+async function fetchIceConfiguration(roomId: string): Promise<IceConfiguration> {
+  const response = await fetch(`/api/webrtc/ice-servers?roomId=${encodeURIComponent(roomId)}`, { cache: "no-store" });
+  const data = await response.json().catch(() => ({})) as IceServerResponse;
+  if (!response.ok || !data.iceServers?.length) {
+    throw new Error(data.error ?? "WebRTC network configuration is unavailable.");
+  }
+  return {
+    iceServers: data.iceServers,
+    forceRelay: Boolean(data.forceRelay),
+    turnConfigured: Boolean(data.turnConfigured),
+    turnProvider: data.turnProvider ?? "none",
+  };
 }
 
 function signalEnvelope(
@@ -196,11 +211,17 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
     }
   }, []);
 
-  const connectivityErrorMessage = useCallback((restoring = false) => turnConfiguredRef.current
-    ? restoring
+  const connectivityErrorMessage = useCallback((restoring = false) => {
+    if (!turnConfiguredRef.current) {
+      return "No TURN relay is configured for this deployment. Direct ICE failed, so this mobile/network combination cannot carry video or audio.";
+    }
+    if (peerRef.current && !peerRef.current.hasRelayCandidate()) {
+      return "TURN is configured, but the browser could not obtain a relay candidate. Check the TURN key, credential endpoint, and allowed UDP/TCP/TLS ports.";
+    }
+    return restoring
       ? "We couldn't restore the call. Try finding someone else."
-      : "We couldn't establish the call. Check your network or try another person."
-    : "No TURN relay is configured for this deployment. Direct ICE failed, so this mobile/network combination cannot carry video or audio.", []);
+      : "We couldn't establish the call. Check your network or try another person.";
+  }, []);
 
   const startConnectionTimeout = useCallback(() => {
     clearTimer(connectionTimerRef);
@@ -210,6 +231,16 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
       setError(connectivityErrorMessage());
     }, CONNECTION_TIMEOUT_MS);
   }, [clearTimer, connectivityErrorMessage]);
+
+  const refreshPeerIceConfiguration = useCallback(async (peer: PeerManager) => {
+    const ice = await fetchIceConfiguration(roomId);
+    if (peerRef.current !== peer) return false;
+    peer.updateIceConfiguration(ice.iceServers, ice.forceRelay);
+    turnConfiguredRef.current = ice.turnConfigured;
+    setTurnConfigured(ice.turnConfigured);
+    if (process.env.NODE_ENV === "development") console.info(`[ICE] refreshed configuration from ${ice.turnProvider}`);
+    return true;
+  }, [roomId]);
 
   const attemptIceRestart = useCallback(async () => {
     const peer = peerRef.current;
@@ -223,6 +254,7 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
     setPhase("reconnecting");
     startConnectionTimeout();
     try {
+      if (!await refreshPeerIceConfiguration(peer)) return;
       if (initiator) await peer.restartIce();
       else await send({ kind: "restart-request" });
     } catch (restartError) {
@@ -230,7 +262,7 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
       setPhase("failed");
       setError(connectivityErrorMessage(true));
     }
-  }, [connectivityErrorMessage, initiator, send, startConnectionTimeout]);
+  }, [connectivityErrorMessage, initiator, refreshPeerIceConfiguration, send, startConnectionTimeout]);
 
   const syncConnectionState = useCallback(() => {
     const connection = peerRef.current?.connection;
@@ -393,7 +425,8 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
       if (signal.kind === "restart-request" && initiator && peerRef.current) {
         setPhase("reconnecting");
         startConnectionTimeout();
-        await peerRef.current.restartIce();
+        const peer = peerRef.current;
+        if (await refreshPeerIceConfiguration(peer)) await peer.restartIce();
         return;
       }
       if (signal.kind === "skip" || signal.kind === "call-ended" || signal.kind === "peer-disconnected") {
@@ -407,7 +440,7 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
       setError("The secure signaling exchange failed. Please retry the call.");
       setPhase("failed");
     }
-  }, [cleanupConnection, initiator, markTimeline, maybeCreateOffer, roomId, startConnectionTimeout, userId]);
+  }, [cleanupConnection, initiator, markTimeline, maybeCreateOffer, refreshPeerIceConfiguration, roomId, startConnectionTimeout, userId]);
 
   const enqueueSignal = useCallback((signal: SignalPayload) => {
     const lifecycle = lifecycleRef.current;
@@ -542,18 +575,16 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
 
       // Local preview is live at this point. Signaling and ICE setup are intentionally independent.
       try {
-        const [signalingChannel, iceResponse] = await Promise.all([
+        const [signalingChannel, iceData] = await Promise.all([
           signalingPromiseRef.current,
-          fetch(`/api/webrtc/ice-servers?roomId=${encodeURIComponent(roomId)}`, { cache: "no-store" }),
+          fetchIceConfiguration(roomId),
         ]);
         if (lifecycle !== lifecycleRef.current) return;
         if (!signalingChannel || !channelRef.current) throw new Error("The private signaling channel is not ready yet. Try again in a moment.");
-        const iceData = await iceResponse.json() as IceServerResponse;
-        if (!iceResponse.ok || !iceData.iceServers?.length) throw new Error(iceData.error ?? "WebRTC network configuration is unavailable.");
-        turnConfiguredRef.current = Boolean(iceData.turnConfigured);
+        turnConfiguredRef.current = iceData.turnConfigured;
         setTurnConfigured(turnConfiguredRef.current);
 
-        const peer = createPeer(iceData.iceServers, Boolean(iceData.forceRelay));
+        const peer = createPeer(iceData.iceServers, iceData.forceRelay);
         if (!peer.connection.getSenders().some((sender) => sender.track)) await peer.addLocalStream(stream, mode === "video");
         for (const candidate of pendingBeforePeerRef.current) await peer.addRemoteIceCandidate(candidate);
         pendingBeforePeerRef.current = [];
@@ -562,7 +593,10 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
         if (readyTimerRef.current) window.clearInterval(readyTimerRef.current);
         readyTimerRef.current = window.setInterval(() => {
           if (phaseRef.current !== "connected" && phaseRef.current !== "ended") {
-            void send({ kind: "peer-ready", mediaReady: true }).catch((readyError) => console.warn("[SIGNAL] ready heartbeat failed", readyError));
+            void (async () => {
+              await send({ kind: "peer-ready", mediaReady: true });
+              await peerRef.current?.resendLocalIceCandidates();
+            })().catch((readyError) => console.warn("[SIGNAL] ready/candidate heartbeat failed", readyError));
           }
         }, 1_500);
         if (DIAGNOSTICS_ENABLED) {

@@ -4,6 +4,7 @@ import { getSessionUser } from "@/lib/server/session";
 import { createServerSupabase } from "@/services/supabase";
 
 type IceServerPayload = { iceServers: RTCIceServer[] };
+type TurnProvider = "cloudflare" | "managed" | "static" | "none";
 
 const TURN_FETCH_TIMEOUT_MS = 6_000;
 
@@ -56,7 +57,7 @@ function withoutBrowserBlockedPort53(servers: RTCIceServer[]) {
   });
 }
 
-async function cloudflareTurnServers(roomId: string): Promise<RTCIceServer[] | null> {
+async function cloudflareTurnServers(): Promise<RTCIceServer[] | null> {
   const keyId = process.env.CLOUDFLARE_TURN_KEY_ID;
   const apiToken = process.env.CLOUDFLARE_TURN_API_TOKEN;
   if (!keyId && !apiToken) return null;
@@ -68,7 +69,10 @@ async function cloudflareTurnServers(roomId: string): Promise<RTCIceServer[] | n
       authorization: `Bearer ${apiToken}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify({ ttl: turnCredentialTtlSeconds(), customIdentifier: roomId }),
+    // Keep this request aligned with Cloudflare's documented
+    // generate-ice-servers payload. The room is already authorization-scoped
+    // by this endpoint, so it does not need to be sent to the TURN provider.
+    body: JSON.stringify({ ttl: turnCredentialTtlSeconds() }),
     cache: "no-store",
     signal: AbortSignal.timeout(TURN_FETCH_TIMEOUT_MS),
   });
@@ -77,7 +81,9 @@ async function cloudflareTurnServers(roomId: string): Promise<RTCIceServer[] | n
   if (!validIceServers(payload.iceServers) || !containsTurnServer(payload.iceServers)) {
     throw new Error("Cloudflare TURN returned no authenticated relay server");
   }
-  return withoutBrowserBlockedPort53(payload.iceServers);
+  const servers = withoutBrowserBlockedPort53(payload.iceServers);
+  if (!containsTurnServer(servers)) throw new Error("Cloudflare TURN returned no browser-usable relay server");
+  return servers;
 }
 
 async function genericManagedTurnServers(userId: string, roomId: string): Promise<RTCIceServer[] | null> {
@@ -98,7 +104,35 @@ async function genericManagedTurnServers(userId: string, roomId: string): Promis
   if (!validIceServers(payload.iceServers) || !containsTurnServer(payload.iceServers)) {
     throw new Error("TURN credential service returned no authenticated relay server");
   }
-  return payload.iceServers;
+  const servers = withoutBrowserBlockedPort53(payload.iceServers);
+  if (!containsTurnServer(servers)) throw new Error("TURN credential service returned no browser-usable relay server");
+  return servers;
+}
+
+async function configuredTurnServers(userId: string, roomId: string): Promise<{ servers: RTCIceServer[]; provider: TurnProvider }> {
+  const failures: unknown[] = [];
+  const providers: Array<{ name: Exclude<TurnProvider, "static" | "none">; load: () => Promise<RTCIceServer[] | null> }> = [
+    { name: "cloudflare", load: () => cloudflareTurnServers() },
+    { name: "managed", load: () => genericManagedTurnServers(userId, roomId) },
+  ];
+
+  for (const provider of providers) {
+    try {
+      const servers = await provider.load();
+      if (servers?.length) return { servers, provider: provider.name };
+    } catch (error) {
+      failures.push(error);
+      console.warn(`[WEBRTC] ${provider.name} TURN provider unavailable; trying the next configured provider`, error);
+    }
+  }
+
+  const staticTurn = staticTurnServer();
+  if (staticTurn) {
+    const servers = withoutBrowserBlockedPort53([staticTurn]);
+    if (containsTurnServer(servers)) return { servers, provider: "static" };
+  }
+  if (failures.length) throw new AggregateError(failures, "Every configured TURN provider failed");
+  return { servers: [], provider: "none" };
 }
 
 export async function GET(request: NextRequest) {
@@ -121,17 +155,14 @@ export async function GET(request: NextRequest) {
   if (!membership) return NextResponse.json({ error: "Not an active room member." }, { status: 403 });
 
   try {
-    const cloudflare = await cloudflareTurnServers(roomId);
-    const managed = cloudflare ?? await genericManagedTurnServers(String(user.id), roomId);
-    const staticTurn = managed?.length ? null : staticTurnServer();
-    const turnServers = managed ?? (staticTurn ? [staticTurn] : []);
-    const turnConfigured = containsTurnServer(turnServers);
-    const iceServers = [...configuredStunServers(), ...turnServers];
+    const turn = await configuredTurnServers(String(user.id), roomId);
+    const turnConfigured = containsTurnServer(turn.servers);
+    const iceServers = [...configuredStunServers(), ...turn.servers];
     return NextResponse.json({
       iceServers,
       forceRelay: process.env.NODE_ENV !== "production" && process.env.WEBRTC_FORCE_RELAY === "true",
       turnConfigured,
-      turnProvider: cloudflare ? "cloudflare" : managed ? "managed" : staticTurn ? "static" : "none",
+      turnProvider: turn.provider,
     }, { headers: { "cache-control": "private, no-store" } });
   } catch (error) {
     console.error("[WEBRTC] TURN credentials unavailable", error);

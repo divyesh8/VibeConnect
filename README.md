@@ -36,6 +36,10 @@ The default scripts use native Next.js 15, so Vercel can detect and deploy the A
 
 Add the variables from [`.env.example`](.env.example), then redeploy. If the Vercel project previously had an overridden build or output directory, remove those overrides before redeploying.
 
+Production video requires a TURN relay for mobile carrier networks and restrictive NATs. The recommended setup uses `CLOUDFLARE_TURN_KEY_ID` and `CLOUDFLARE_TURN_API_TOKEN`; the room-authorized API exchanges them for short-lived browser credentials.
+
+For the included OpenAI Sites project, add those two values as production secrets in the Site environment before publishing. A successful code deployment without TURN secrets still supports direct ICE where possible, but it cannot guarantee audio/video between carrier networks and restrictive Wi-Fi.
+
 ## Production data setup
 
 Run [`supabase/schema.sql`](supabase/schema.sql) in a new Supabase project. For an existing project, apply every numbered file in [`supabase/migrations`](supabase/migrations) in order through `009_live_pairing_reconnect.sql`. Configure the values from [`.env.example`](.env.example), and follow [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). The system design and audit are documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/WEBRTC_AUDIT.md`](docs/WEBRTC_AUDIT.md).

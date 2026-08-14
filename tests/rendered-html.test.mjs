@@ -124,18 +124,35 @@ test("database handoff ends the old room only after the new person accepts", asy
 });
 
 test("signaling is room-bound and waits for both media-ready peers", async () => {
-  const [realtime, hook, peer, env] = await Promise.all([
+  const [realtime, hook, peer, env, iceRoute] = await Promise.all([
     readFile(new URL("services/realtime.ts", root), "utf8"),
     readFile(new URL("hooks/use-webrtc.ts", root), "utf8"),
     readFile(new URL("webrtc/peer-manager.ts", root), "utf8"),
     readFile(new URL(".env.example", root), "utf8"),
+    readFile(new URL("app/api/webrtc/ice-servers/route.ts", root), "utf8"),
   ]);
   assert.match(realtime, /roomId: string; senderId: string; timestamp: number; nonce: string/);
   assert.match(hook, /!mediaReadyRef\.current \|\| !remoteReadyRef\.current/);
   assert.match(hook, /signal\.roomId !== roomId \|\| signal\.senderId === userId/);
   assert.match(peer, /pendingCandidates/);
+  assert.match(peer, /resendLocalIceCandidates/);
+  assert.match(peer, /updateIceConfiguration/);
+  assert.match(peer, /setConfiguration/);
+  assert.match(peer, /candidate\.usernameFragment/);
+  assert.match(peer, /candidateKeys\.delete\(candidateKey\(candidate\)\)/);
   assert.match(peer, /iceTransportPolicy: options\.forceRelay \? "relay" : "all"/);
+  assert.match(hook, /resendLocalIceCandidates\(\)/);
+  assert.match(hook, /refreshPeerIceConfiguration/);
+  assert.match(hook, /fetchIceConfiguration\(roomId\)/);
   assert.doesNotMatch(env, /NEXT_PUBLIC_TURN_(?:URL|USERNAME|CREDENTIAL)=/);
+  assert.match(env, /CLOUDFLARE_TURN_KEY_ID=/);
+  assert.match(env, /CLOUDFLARE_TURN_API_TOKEN=/);
+  assert.match(iceRoute, /credentials\/generate-ice-servers/);
+  assert.match(iceRoute, /AbortSignal\.timeout\(TURN_FETCH_TIMEOUT_MS\)/);
+  assert.match(iceRoute, /containsTurnServer\(payload\.iceServers\)/);
+  assert.match(iceRoute, /configuredTurnServers/);
+  assert.match(iceRoute, /trying the next configured provider/);
+  assert.match(iceRoute, /turnProvider:/);
 });
 
 test("queue presence and repeated two-person tests cannot create a false waiting state", async () => {

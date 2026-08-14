@@ -49,6 +49,14 @@ function descriptionInit(description: RTCSessionDescription | null): RTCSessionD
   return { type: description.type, sdp: description.sdp };
 }
 
+function candidateKey(candidate: RTCIceCandidateInit) {
+  return `${candidate.usernameFragment ?? ""}:${candidate.sdpMid ?? ""}:${candidate.sdpMLineIndex ?? ""}:${candidate.candidate ?? ""}`;
+}
+
+function iceUfrag(description: RTCSessionDescriptionInit) {
+  return description.sdp?.match(/^a=ice-ufrag:(.+)$/m)?.[1]?.trim() ?? null;
+}
+
 function trackState(stream: MediaStream | null, kind: "audio" | "video"): MediaStreamTrackState | "missing" {
   return stream?.getTracks().find((track) => track.kind === kind)?.readyState ?? "missing";
 }
@@ -149,6 +157,9 @@ export class PeerManager {
   readonly connection: RTCPeerConnection;
   private pendingCandidates: RTCIceCandidateInit[] = [];
   private candidateKeys = new Set<string>();
+  private localCandidates: RTCIceCandidateInit[] = [];
+  private localCandidateKeys = new Set<string>();
+  private remoteIceUfrag: string | null = null;
   private remoteStream = new MediaStream();
   private emittedMilestones = new Set<PeerMilestone>();
   private previousStatsSample: StatsSample | null = null;
@@ -168,10 +179,19 @@ export class PeerManager {
 
     this.connection.onicecandidate = (event) => {
       if (!event.candidate || this.closed) return;
+      const candidate = event.candidate.toJSON();
+      const key = candidateKey(candidate);
+      if (!this.localCandidateKeys.has(key)) {
+        this.localCandidateKeys.add(key);
+        this.localCandidates.push(candidate);
+      }
       this.markMilestone("first-local-ice");
       developmentLog("ICE", `local candidate generated (${event.candidate.type ?? "unknown"})`);
-      void this.options.emitSignal({ kind: "ice-candidate", candidate: event.candidate.toJSON() })
+      void this.options.emitSignal({ kind: "ice-candidate", candidate })
         .catch((error) => this.options.onError("Could not send an ICE candidate.", error));
+    };
+    this.connection.onicecandidateerror = (event) => {
+      developmentLog("ICE", `candidate error ${event.errorCode}: ${event.errorText}`, { url: event.url });
     };
     this.connection.ontrack = (event) => {
       if (this.closed) return;
@@ -252,6 +272,7 @@ export class PeerManager {
     if (this.closed || this.makingOffer || this.connection.signalingState !== "stable") return false;
     this.makingOffer = true;
     try {
+      if (options.iceRestart) this.clearLocalCandidates();
       developmentLog("SIGNAL", options.iceRestart ? "creating ICE-restart offer" : "creating offer");
       const offer = await this.connection.createOffer({ iceRestart: options.iceRestart });
       developmentLog("SIGNAL", "OFFER CREATED", { type: offer.type, sdpLength: offer.sdp?.length ?? 0 });
@@ -287,6 +308,7 @@ export class PeerManager {
       developmentLog("SIGNAL", "duplicate offer recovered by re-sending the existing answer");
       return;
     }
+    this.prepareForRemoteDescription(sdp);
     developmentLog("SIGNAL", "OFFER RECEIVED", { type: sdp.type, sdpLength: sdp.sdp?.length ?? 0 });
     await this.connection.setRemoteDescription(sdp);
     await this.flushCandidates();
@@ -299,6 +321,7 @@ export class PeerManager {
 
   async acceptAnswer(sdp: RTCSessionDescriptionInit) {
     if (this.closed || this.connection.signalingState === "stable") return;
+    this.prepareForRemoteDescription(sdp);
     developmentLog("SIGNAL", "ANSWER RECEIVED", { type: sdp.type, sdpLength: sdp.sdp?.length ?? 0 });
     await this.connection.setRemoteDescription(sdp);
     await this.flushCandidates();
@@ -306,16 +329,39 @@ export class PeerManager {
 
   async addRemoteIceCandidate(candidate: RTCIceCandidateInit) {
     if (this.closed) return;
-    const key = `${candidate.sdpMid ?? ""}:${candidate.sdpMLineIndex ?? ""}:${candidate.candidate ?? ""}`;
+    const key = candidateKey(candidate);
     if (this.candidateKeys.has(key)) return;
-    this.candidateKeys.add(key);
     if (!this.connection.remoteDescription) {
+      this.candidateKeys.add(key);
       this.pendingCandidates.push(candidate);
       developmentLog("ICE", "remote candidate queued until remoteDescription");
       return;
     }
     await this.connection.addIceCandidate(candidate);
+    this.candidateKeys.add(key);
     developmentLog("ICE", "remote candidate added");
+  }
+
+  async resendLocalIceCandidates() {
+    if (this.closed) return;
+    for (const candidate of this.localCandidates) {
+      await this.options.emitSignal({ kind: "ice-candidate", candidate });
+    }
+    if (this.localCandidates.length) developmentLog("ICE", `${this.localCandidates.length} local candidates re-sent`);
+  }
+
+  hasRelayCandidate() {
+    return this.localCandidates.some((candidate) => /\btyp relay\b/.test(candidate.candidate ?? ""));
+  }
+
+  updateIceConfiguration(iceServers: RTCIceServer[], forceRelay: boolean) {
+    if (this.closed) throw new Error("The peer connection is already closed.");
+    this.connection.setConfiguration({
+      ...this.connection.getConfiguration(),
+      iceServers,
+      iceTransportPolicy: forceRelay ? "relay" : "all",
+    });
+    developmentLog("ICE", `ICE server configuration refreshed (${forceRelay ? "relay-only" : "all candidates"})`);
   }
 
   async restartIce() {
@@ -487,6 +533,7 @@ export class PeerManager {
     this.closed = true;
     this.pendingCandidates = [];
     this.candidateKeys.clear();
+    this.clearLocalCandidates();
     this.previousStatsSample = null;
     for (const track of this.remoteStream.getTracks()) {
       track.onended = null;
@@ -496,6 +543,7 @@ export class PeerManager {
     }
     this.connection.ontrack = null;
     this.connection.onicecandidate = null;
+    this.connection.onicecandidateerror = null;
     this.connection.onconnectionstatechange = null;
     this.connection.oniceconnectionstatechange = null;
     this.connection.onicegatheringstatechange = null;
@@ -537,8 +585,29 @@ export class PeerManager {
     const queued = this.pendingCandidates;
     this.pendingCandidates = [];
     for (const candidate of queued) {
-      await this.connection.addIceCandidate(candidate);
-      developmentLog("ICE", "queued remote candidate added");
+      try {
+        await this.connection.addIceCandidate(candidate);
+        developmentLog("ICE", "queued remote candidate added");
+      } catch (error) {
+        this.candidateKeys.delete(candidateKey(candidate));
+        throw error;
+      }
     }
+  }
+
+  private clearLocalCandidates() {
+    this.localCandidates = [];
+    this.localCandidateKeys.clear();
+  }
+
+  private prepareForRemoteDescription(description: RTCSessionDescriptionInit) {
+    const nextUfrag = iceUfrag(description);
+    if (this.remoteIceUfrag && nextUfrag && this.remoteIceUfrag !== nextUfrag) {
+      this.pendingCandidates = [];
+      this.candidateKeys.clear();
+      this.clearLocalCandidates();
+      developmentLog("ICE", "new remote ICE generation detected");
+    }
+    if (nextUfrag) this.remoteIceUfrag = nextUfrag;
   }
 }
