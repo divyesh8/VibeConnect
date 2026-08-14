@@ -10,15 +10,10 @@ export const displayNameSchema = z.string()
 export const sessionSchema = z.object({
   username: displayNameSchema,
   gender: z.enum(["male", "female", "other"]),
-  mode: z.enum(["text", "voice", "video"]),
-  interests: z.array(z.string().trim().min(1).max(32)).max(5).default([]),
   botToken: z.string().max(2048).optional(),
 });
 
-export const profilePreferenceSchema = z.object({
-  mode: z.enum(["text", "voice", "video"]),
-  interests: z.array(z.string().trim().min(1).max(32)).max(5).default([]),
-});
+export const profilePreferenceSchema = z.object({}).strict();
 
 export const messageSchema = z.object({
   roomId: z.string().uuid(),

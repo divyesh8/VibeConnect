@@ -43,7 +43,7 @@ export async function subscribeToRoom(
   const topic = purpose === "chat" ? `room:${roomId}:chat` : `room:${roomId}`;
   console.info(`[${purpose === "chat" ? "CHAT" : "SIGNAL"}] subscribing:`, topic);
   const channel = supabase
-    .channel(topic, { config: { private: true, broadcast: { self: false } } })
+    .channel(topic, { config: { private: true, broadcast: { self: false, ack: purpose === "signaling" } } })
     .on(
       "postgres_changes",
       { event: "INSERT", schema: "public", table: "messages", filter: `room_id=eq.${roomId}` },
@@ -111,7 +111,8 @@ export async function sendTyping(channel: RealtimeChannel | null, senderId: stri
 
 export async function sendSignal(channel: RealtimeChannel | null, signal: SignalPayload) {
   if (!channel) throw new Error("The private signaling channel is not ready.");
-  await channel?.send({ type: "broadcast", event: "webrtc", payload: signal });
+  const status = await channel.send({ type: "broadcast", event: "webrtc", payload: signal });
+  if (status !== "ok") throw new Error(`The signaling broadcast ${status}.`);
 }
 
 export async function leaveRoomChannel(channel: RealtimeChannel | null) {

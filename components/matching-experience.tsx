@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, Headphones, MessageCircleMore, ShieldCheck, UserCheck, Video, X } from "lucide-react";
+import { Check, ShieldCheck, UserCheck, Video, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { AmbientBackground } from "@/components/ambient-background";
@@ -13,7 +13,6 @@ import { useQueuePresence } from "@/hooks/use-queue-presence";
 import { formatDuration, initials } from "@/lib/utils";
 import type { MatchProposalStatus, MatchResult } from "@/types";
 
-const modeIcon = { text: MessageCircleMore, voice: Headphones, video: Video };
 type MatchPhase = "searching" | "proposal" | "accepted" | "connecting" | "error";
 type RealPartner = { id: string; username: string; interests: string[] };
 
@@ -158,13 +157,11 @@ export function MatchingExperience() {
     router.push("/start");
   }
 
-  const ModeIcon = modeIcon[profile?.mode ?? "text"];
   const queueCopy = presence.presenceConnected
     ? presence.liveSearchingSessions <= 1
-      ? "You’re the only live person in this mode right now."
-      : `${presence.liveSearchingSessions} real people are live in this mode.`
+      ? "You’re the only live person in the video queue right now."
+      : `${presence.liveSearchingSessions} real people are live in the video queue.`
     : "Waiting for another real person to join.";
-  const sharedInterests = partner && profile ? partner.interests.filter((interest) => profile.interests.includes(interest)) : [];
 
   if (!isLoaded || !profile) {
     return <main className="app-page grid min-h-screen place-items-center"><AmbientBackground /><div className="flex items-center gap-3 text-sm font-bold text-white/45"><span className="status-dot" /> Restoring your temporary profile...</div></main>;
@@ -176,7 +173,7 @@ export function MatchingExperience() {
       <header className="mx-auto flex w-full max-w-[1180px] items-center justify-between">
         <Logo />
         <div className="flex items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-[10px] font-bold text-white/38">
-          <ModeIcon className="size-3.5 text-[#78f7df]" /> {profile?.mode ?? "text"} mode
+          <Video className="size-3.5 text-[#78f7df]" /> Video only
         </div>
       </header>
 
@@ -193,7 +190,7 @@ export function MatchingExperience() {
                 </div>
               </div>
               <h1 className="mt-8 font-display text-4xl font-semibold tracking-[-.055em] sm:text-5xl">Waiting for someone to join<span className="text-[#78f7df]">...</span></h1>
-              <p className="mx-auto mt-4 max-w-md text-sm text-white/40">Looking for someone online in {profile?.mode} mode. No bots, no simulated matches.</p>
+              <p className="mx-auto mt-4 max-w-md text-sm text-white/40">Looking for an opposite-gender video match first, with same-gender fallback when needed. No bots, no simulated matches.</p>
               <GlassCard className="mx-auto mt-8 max-w-md rounded-2xl px-4 py-3 text-left">
                 <div className="flex items-center justify-between gap-4">
                   <div className="flex items-center gap-3"><div className="grid size-9 place-items-center rounded-xl bg-white/[0.06] text-[#78f7df]"><ShieldCheck className="size-4" /></div><div><p className="text-[10px] font-bold text-white/30">Real-time presence</p><p className="mt-0.5 text-xs font-extrabold">{queueCopy}</p></div></div>
@@ -210,7 +207,7 @@ export function MatchingExperience() {
               <div className="profile-gradient-2 relative mx-auto grid size-28 place-items-center rounded-[38px] font-display text-2xl font-black text-[#0b2823] shadow-[0_0_70px_rgba(120,247,223,.18)]">{initials(partner.username)}<span className="absolute -bottom-2 -right-2 grid size-9 place-items-center rounded-full border-4 border-[#0b0911] bg-[#78f7df] text-black"><UserCheck className="size-4" /></span></div>
               <div className="eyebrow mt-7"><span className="status-dot" /> Real person found</div>
               <h1 className="mt-4 font-display text-4xl font-semibold tracking-[-.055em] sm:text-5xl">Connect with {partner.username}?</h1>
-              <p className="mt-4 text-sm text-white/40">{sharedInterests.length ? `Shared interests: ${sharedInterests.join(" + ")}` : `Both of you selected ${profile?.mode} mode.`}</p>
+              <p className="mt-4 text-sm text-white/40">Your private video room opens after both of you accept.</p>
               {phase === "proposal" ? (
                 <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row"><Button size="lg" onClick={acceptProposal}><Check className="size-4" /> Accept connection</Button><Button size="lg" variant="secondary" onClick={declineProposal}>Not this time</Button></div>
               ) : (

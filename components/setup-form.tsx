@@ -7,8 +7,6 @@ import {
   Camera,
   Check,
   LogOut,
-  MessageCircleMore,
-  Mic2,
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
@@ -21,38 +19,22 @@ import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { GlassCard } from "@/components/ui/glass-card";
 import { useGuestProfile } from "@/components/guest-profile-provider";
-import { GENDERS, INTERESTS, MODES } from "@/lib/constants";
+import { GENDERS } from "@/lib/constants";
 import { displayNameSchema } from "@/lib/validation";
 import { ensureAnonymousAuth } from "@/services/supabase";
 import { cn } from "@/lib/utils";
-import type { AnonymousProfile, CommunicationMode, Gender } from "@/types";
-
-const modeIcons = {
-  text: MessageCircleMore,
-  voice: Mic2,
-  video: Camera,
-};
+import type { AnonymousProfile, Gender } from "@/types";
 
 export function SetupForm() {
   const router = useRouter();
   const { profile, isLoaded, setProfile, updateProfile, clearProfile } = useGuestProfile();
   const [username, setUsername] = useState("");
   const [gender, setGender] = useState<Gender | null>(null);
-  const [mode, setMode] = useState<CommunicationMode>("text");
-  const [interests, setInterests] = useState<string[]>([]);
   const [ageConfirmed, setAgeConfirmed] = useState(false);
   const [botToken, setBotToken] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
-
-  useEffect(() => {
-    if (!profile) return;
-    queueMicrotask(() => {
-      setMode(profile.mode);
-      setInterests(profile.interests);
-    });
-  }, [profile]);
 
   useEffect(() => {
     const browserWindow = window as typeof window & {
@@ -67,16 +49,6 @@ export function SetupForm() {
     };
   }, []);
 
-  const toggleInterest = (interest: string) => {
-    setInterests((current) =>
-      current.includes(interest)
-        ? current.filter((item) => item !== interest)
-        : current.length < 5
-          ? [...current, interest]
-          : current,
-    );
-  };
-
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
     setError("");
@@ -87,11 +59,11 @@ export function SetupForm() {
         const response = await fetch("/api/session", {
           method: "PATCH",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ mode, interests }),
+          body: JSON.stringify({}),
         });
         const data = await response.json() as { error?: string };
         if (!response.ok) throw new Error(data.error ?? "Your session preferences could not be updated.");
-        updateProfile({ mode, interests });
+        updateProfile({ mode: "video", interests: [] });
         router.push("/matching");
         return;
       }
@@ -108,7 +80,7 @@ export function SetupForm() {
       const response = await fetch("/api/session", {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${authSession.access_token}` },
-        body: JSON.stringify({ username: parsedName.data, gender, mode, interests, botToken: botToken || undefined }),
+        body: JSON.stringify({ username: parsedName.data, gender, botToken: botToken || undefined }),
       });
       const data = await response.json() as { profile?: AnonymousProfile; error?: string };
       if (!response.ok || !data.profile) throw new Error(data.error ?? "Live matching is unavailable.");
@@ -125,8 +97,6 @@ export function SetupForm() {
     clearProfile();
     setUsername("");
     setGender(null);
-    setMode("text");
-    setInterests([]);
     setAgeConfirmed(false);
     setError("");
   }
@@ -243,58 +213,13 @@ export function SetupForm() {
                 </div>
               )}
 
-              <fieldset>
-                <legend className="mb-2.5 text-xs font-extrabold text-white/70">How do you want to connect?</legend>
-                <div className="grid gap-2 sm:grid-cols-3">
-                  {MODES.map((item) => {
-                    const Icon = modeIcons[item.value];
-                    const selected = mode === item.value;
-                    return (
-                      <button
-                        key={item.value}
-                        type="button"
-                        onClick={() => setMode(item.value)}
-                        className={cn(
-                          "group flex items-center gap-3 rounded-2xl border p-3 text-left transition sm:block sm:p-4",
-                          selected
-                            ? "border-[#a988ff]/55 bg-[#9d78ff]/[0.12] shadow-[inset_0_1px_0_rgba(255,255,255,.07)]"
-                            : "border-white/[0.08] bg-white/[0.035] hover:border-white/15",
-                        )}
-                      >
-                        <span className={cn("grid size-10 place-items-center rounded-xl transition sm:mb-4", selected ? "bg-white text-black" : "bg-white/[0.06] text-white/45 group-hover:text-white")}><Icon className="size-[18px]" /></span>
-                        <span><span className="block text-xs font-extrabold">{item.label}</span><span className="mt-1 block text-[10px] text-white/32">{item.description}</span></span>
-                      </button>
-                    );
-                  })}
+              <div className="flex items-center gap-4 rounded-2xl border border-[#a988ff]/35 bg-[#9d78ff]/[0.1] p-4">
+                <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-white text-black"><Camera className="size-[19px]" /></span>
+                <div>
+                  <p className="text-xs font-extrabold text-white">Video connection</p>
+                  <p className="mt-1 text-[10px] leading-4 text-white/38">Camera stays on during every call. You can mute or unmute your microphone at any time.</p>
                 </div>
-              </fieldset>
-
-              <fieldset>
-                <div className="mb-2.5 flex items-center justify-between">
-                  <legend className="text-xs font-extrabold text-white/70">What are you into? <span className="font-medium text-white/25">optional</span></legend>
-                  <span className="text-[10px] font-bold text-white/25">Pick up to 5</span>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {INTERESTS.map((interest) => {
-                    const selected = interests.includes(interest);
-                    return (
-                      <button
-                        key={interest}
-                        type="button"
-                        onClick={() => toggleInterest(interest)}
-                        className={cn(
-                          "rounded-full border px-3.5 py-2 text-[11px] font-bold transition",
-                          selected
-                            ? "border-[#ff62b5]/45 bg-[#ff62b5]/10 text-[#ffb4db]"
-                            : "border-white/[0.08] bg-white/[0.03] text-white/38 hover:text-white/70",
-                        )}
-                      >
-                        {interest} {selected && <span className="ml-1">×</span>}
-                      </button>
-                    );
-                  })}
-                </div>
-              </fieldset>
+              </div>
 
               <AnimatePresence mode="wait">
                 {error && (
@@ -307,7 +232,7 @@ export function SetupForm() {
               <div className="flex flex-col gap-3 border-t border-white/[0.07] pt-5 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-[10px] leading-4 text-white/26"><ShieldCheck className="mr-1 inline size-3 text-[#78f7df]" /> Friendly conversations only</p>
                 <Button type="submit" size="lg" disabled={submitting} className="group sm:min-w-48">
-                  {submitting ? (profile ? "Updating your mode..." : "Creating your vibe...") : "Find someone"}
+                  {submitting ? (profile ? "Preparing video..." : "Creating your vibe...") : "Find someone"}
                   {!submitting && <ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />}
                 </Button>
               </div>

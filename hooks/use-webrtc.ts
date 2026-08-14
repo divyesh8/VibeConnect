@@ -3,8 +3,8 @@
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { leaveRoomChannel, sendSignal, subscribeToRoom, type SignalPayload } from "@/services/realtime";
-import type { CommunicationMode, WebRTCDiagnostics, WebRTCPhase } from "@/types";
-import { PeerManager, type PeerSignal } from "@/webrtc/peer-manager";
+import type { CommunicationMode, WebRTCDiagnostics, WebRTCPhase, WebRTCTimeline } from "@/types";
+import { PeerManager, type PeerMilestone, type PeerSignal } from "@/webrtc/peer-manager";
 
 type IceServerResponse = { iceServers?: RTCIceServer[]; forceRelay?: boolean; error?: string };
 type MediaStatus = "idle" | "requesting" | "ready" | "error";
@@ -37,6 +37,17 @@ type UseWebRTCOptions = {
 
 const CONNECTION_TIMEOUT_MS = 20_000;
 const DISCONNECT_GRACE_MS = 5_000;
+const DIAGNOSTICS_ENABLED = process.env.NODE_ENV === "development";
+
+const PEER_MILESTONES: Record<PeerMilestone, keyof WebRTCTimeline> = {
+  "first-local-ice": "firstLocalIce",
+  "ice-connected": "iceConnected",
+  "peer-connected": "peerConnected",
+  "first-remote-audio-track": "firstRemoteAudioTrack",
+  "first-remote-video-track": "firstRemoteVideoTrack",
+  "first-inbound-video-packet": "firstInboundVideoPacket",
+  "first-decoded-video-frame": "firstDecodedVideoFrame",
+};
 
 function mediaErrorMessage(error: unknown, mode: CommunicationMode) {
   if (!(error instanceof DOMException)) return error instanceof Error ? error.message : "We could not start your camera or microphone.";
@@ -54,8 +65,17 @@ function mediaErrorMessage(error: unknown, mode: CommunicationMode) {
 
 async function requestLocalMedia(mode: CommunicationMode) {
   return navigator.mediaDevices.getUserMedia({
-    audio: true,
-    video: mode === "video",
+    audio: {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    },
+    video: mode === "video" ? {
+      width: { ideal: 1280 },
+      height: { ideal: 720 },
+      frameRate: { ideal: 24, max: 30 },
+      facingMode: "user",
+    } : false,
   });
 }
 
@@ -77,7 +97,6 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [micEnabled, setMicEnabled] = useState(true);
-  const [cameraEnabled, setCameraEnabled] = useState(mode === "video");
   const [phase, setPhase] = useState<WebRTCPhase>(enabled ? "subscribing" : "idle");
   const [error, setError] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<WebRTCDiagnostics | null>(null);
@@ -85,6 +104,7 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
   const [mediaPermission, setMediaPermission] = useState<MediaPermissionStatus>("unknown");
   const [realtimeStatus, setRealtimeStatus] = useState<"IDLE" | "CONNECTING" | "SUBSCRIBED" | "TIMED_OUT" | "CLOSED" | "CHANNEL_ERROR">("IDLE");
   const [signalDiagnostics, setSignalDiagnostics] = useState<SignalDiagnostics>(EMPTY_SIGNAL_DIAGNOSTICS);
+  const [timeline, setTimeline] = useState<WebRTCTimeline>({});
 
   const streamRef = useRef<MediaStream | null>(null);
   const peerRef = useRef<PeerManager | null>(null);
@@ -102,6 +122,13 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
   const connectionTimerRef = useRef<number | null>(null);
   const disconnectTimerRef = useRef<number | null>(null);
   const statsTimerRef = useRef<number | null>(null);
+  const statsRefreshInFlightRef = useRef(false);
+  const statsGenerationRef = useRef(0);
+  const mediaStartTokenRef = useRef<symbol | null>(null);
+  const lifecycleRef = useRef(0);
+  const signalQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const timelineOriginRef = useRef<number | null>(null);
+  const timelineRef = useRef<WebRTCTimeline>({});
   const onPeerEndedRef = useRef(onPeerEnded);
 
   useEffect(() => {
@@ -117,6 +144,22 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
     timerRef.current = null;
   }, []);
 
+  const resetTimeline = useCallback(() => {
+    timelineOriginRef.current = performance.now();
+    timelineRef.current = { matched: 0 };
+    queueMicrotask(() => setTimeline({ matched: 0 }));
+  }, []);
+
+  const markTimeline = useCallback((milestone: keyof WebRTCTimeline) => {
+    if (timelineRef.current[milestone] !== undefined) return;
+    if (timelineOriginRef.current === null) timelineOriginRef.current = performance.now();
+    const elapsed = Math.round(performance.now() - timelineOriginRef.current);
+    const next = { ...timelineRef.current, [milestone]: elapsed };
+    timelineRef.current = next;
+    setTimeline(next);
+    if (process.env.NODE_ENV === "development") console.info(`[TIMING] ${milestone}: ${elapsed} ms`);
+  }, []);
+
   const send = useCallback(async (
     signal: PeerSignal | { kind: "peer-ready"; mediaReady: boolean } | { kind: "restart-request" } | { kind: "skip" | "call-ended" | "peer-disconnected" },
   ) => {
@@ -125,18 +168,29 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
       console.info("[SIGNAL] peer-ready sent", { mediaReady: signal.mediaReady });
       setSignalDiagnostics((current) => ({ ...current, peerReady: "sent" }));
     }
-    if (signal.kind === "offer") setSignalDiagnostics((current) => ({ ...current, offer: "sent" }));
-    if (signal.kind === "answer") setSignalDiagnostics((current) => ({ ...current, answer: "sent" }));
+    if (signal.kind === "offer") {
+      markTimeline("offerSent");
+      setSignalDiagnostics((current) => ({ ...current, offer: "sent" }));
+    }
+    if (signal.kind === "answer") {
+      markTimeline("answerSent");
+      setSignalDiagnostics((current) => ({ ...current, answer: "sent" }));
+    }
     if (signal.kind === "ice-candidate") setSignalDiagnostics((current) => ({ ...current, localIce: current.localIce + 1 }));
-  }, [roomId, userId]);
+  }, [markTimeline, roomId, userId]);
 
   const refreshDiagnostics = useCallback(async () => {
     const peer = peerRef.current;
-    if (!peer) return;
+    if (!peer || statsRefreshInFlightRef.current) return;
+    const generation = statsGenerationRef.current;
+    statsRefreshInFlightRef.current = true;
     try {
-      setDiagnostics(await peer.getDiagnostics(streamRef.current));
+      const nextDiagnostics = await peer.getDiagnostics(streamRef.current);
+      if (generation === statsGenerationRef.current && peerRef.current === peer) setDiagnostics(nextDiagnostics);
     } catch (statsError) {
       if (process.env.NODE_ENV === "development") console.warn("[WEBRTC] getStats failed", statsError);
+    } finally {
+      if (generation === statsGenerationRef.current) statsRefreshInFlightRef.current = false;
     }
   }, []);
 
@@ -173,7 +227,7 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
   const syncConnectionState = useCallback(() => {
     const connection = peerRef.current?.connection;
     if (!connection) return;
-    void refreshDiagnostics();
+    if (DIAGNOSTICS_ENABLED) void refreshDiagnostics();
     if (connection.connectionState === "connected") {
       clearTimer(connectionTimerRef);
       clearTimer(disconnectTimerRef);
@@ -212,8 +266,9 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
       iceServers,
       forceRelay,
       emitSignal: send,
-      onRemoteStream: (stream) => setRemoteStream(new MediaStream(stream.getTracks())),
+      onRemoteStream: setRemoteStream,
       onStateChange: syncConnectionState,
+      onMilestone: (milestone) => markTimeline(PEER_MILESTONES[milestone]),
       onError: (message, signalError) => {
         console.error("[WEBRTC]", message, signalError);
         setError(message);
@@ -221,7 +276,7 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
     });
     peerRef.current = peer;
     return peer;
-  }, [send, syncConnectionState]);
+  }, [markTimeline, send, syncConnectionState]);
 
   const maybeCreateOffer = useCallback(async () => {
     if (!initiator || !mediaReadyRef.current || !remoteReadyRef.current || offerStartedRef.current || !peerRef.current) return;
@@ -232,7 +287,7 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
       if (started) startConnectionTimeout();
       else offerStartedRef.current = false;
     } catch (offerError) {
-      offerStartedRef.current = false;
+      offerStartedRef.current = peerRef.current?.connection.localDescription?.type === "offer";
       console.error("[SIGNAL] offer creation failed", offerError);
       setError("The secure call setup failed before an offer could be sent.");
       setPhase("failed");
@@ -240,11 +295,15 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
   }, [initiator, startConnectionTimeout]);
 
   const cleanupConnection = useCallback(async (leaveChannel: boolean, updateState = true) => {
+    lifecycleRef.current += 1;
     clearTimer(readyTimerRef);
     clearTimer(connectionTimerRef);
     clearTimer(disconnectTimerRef);
     if (statsTimerRef.current) window.clearInterval(statsTimerRef.current);
     statsTimerRef.current = null;
+    statsGenerationRef.current += 1;
+    statsRefreshInFlightRef.current = false;
+    mediaStartTokenRef.current = null;
     peerRef.current?.close();
     peerRef.current = null;
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -256,6 +315,7 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
     restartAttemptsRef.current = 0;
     pendingBeforePeerRef.current = [];
     seenNoncesRef.current.clear();
+    signalQueueRef.current = Promise.resolve();
     if (leaveChannel) {
       const channel = channelRef.current;
       channelRef.current = null;
@@ -266,6 +326,7 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
       setLocalStream(null);
       setRemoteStream(null);
       setDiagnostics(null);
+      setMicEnabled(true);
       setMediaStatus("idle");
       setMediaPermission("unknown");
       setRealtimeStatus("IDLE");
@@ -286,17 +347,22 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
         if (signal.mediaReady) {
           remoteReadyRef.current = true;
           if (mediaReadyRef.current && phaseRef.current === "waiting-for-peer") setPhase("signaling");
-          await maybeCreateOffer();
+          const recoveredPendingOffer = initiator && offerStartedRef.current
+            ? await peerRef.current?.resendPendingOffer() ?? false
+            : false;
+          if (!recoveredPendingOffer) await maybeCreateOffer();
         }
         return;
       }
       if (signal.kind === "ice-candidate") {
+        markTimeline("firstRemoteIce");
         setSignalDiagnostics((current) => ({ ...current, remoteIce: current.remoteIce + 1 }));
         if (peerRef.current) await peerRef.current.addRemoteIceCandidate(signal.candidate);
         else pendingBeforePeerRef.current.push(signal.candidate);
         return;
       }
       if (signal.kind === "offer") {
+        markTimeline("offerReceived");
         setSignalDiagnostics((current) => ({ ...current, offer: "received" }));
         if (initiator || !peerRef.current || !mediaReadyRef.current) return;
         setPhase("signaling");
@@ -306,8 +372,10 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
         return;
       }
       if (signal.kind === "answer") {
+        markTimeline("answerReceived");
         setSignalDiagnostics((current) => ({ ...current, answer: "received" }));
         if (!initiator || !peerRef.current) return;
+        offerStartedRef.current = true;
         await peerRef.current.acceptAnswer(signal.sdp);
         setPhase("ice-connecting");
         return;
@@ -329,18 +397,30 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
       setError("The secure signaling exchange failed. Please retry the call.");
       setPhase("failed");
     }
-  }, [cleanupConnection, initiator, maybeCreateOffer, roomId, startConnectionTimeout, userId]);
+  }, [cleanupConnection, initiator, markTimeline, maybeCreateOffer, roomId, startConnectionTimeout, userId]);
+
+  const enqueueSignal = useCallback((signal: SignalPayload) => {
+    const lifecycle = lifecycleRef.current;
+    const queued = signalQueueRef.current.then(() => {
+      if (lifecycle === lifecycleRef.current) return handleSignal(signal);
+    });
+    signalQueueRef.current = queued.catch((queueError) => {
+      console.error("[SIGNAL] serialized signal processing failed", queueError);
+    });
+  }, [handleSignal]);
 
   useEffect(() => {
     if (!enabled || mode === "text" || !roomId || !userId) {
       queueMicrotask(() => setPhase("idle"));
       return;
     }
+    lifecycleRef.current += 1;
+    resetTimeline();
     let active = true;
     queueMicrotask(() => setPhase("subscribing"));
     queueMicrotask(() => setRealtimeStatus("CONNECTING"));
     const subscription = subscribeToRoom(roomId, {
-      onSignal: (signal) => void handleSignal(signal),
+      onSignal: enqueueSignal,
       onStatus: (status) => {
         if (active) setRealtimeStatus(status);
       },
@@ -353,6 +433,7 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
           return;
         }
         channelRef.current = channel;
+        markTimeline("signalingSubscribed");
         setRealtimeStatus("SUBSCRIBED");
         setPhase("idle");
         return send({ kind: "peer-ready", mediaReady: false });
@@ -370,7 +451,7 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
       active = false;
       void cleanupConnection(true, false);
     };
-  }, [cleanupConnection, enabled, handleSignal, mode, roomId, send, userId]);
+  }, [cleanupConnection, enabled, enqueueSignal, markTimeline, mode, resetTimeline, roomId, send, userId]);
 
   const startMedia = useCallback(async () => {
     console.info("[MEDIA] Enable button clicked");
@@ -390,14 +471,23 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
       setPhase("failed");
       return;
     }
-    setError(null);
-    let stream = streamRef.current;
-    if (!stream) {
+    if (mediaStartTokenRef.current) return;
+    const mediaStartToken = Symbol("media-start");
+    mediaStartTokenRef.current = mediaStartToken;
+    const lifecycle = lifecycleRef.current;
+    try {
+      setError(null);
+      let stream = streamRef.current;
+      if (!stream) {
       setMediaStatus("requesting");
       setPhase("media-preparing");
       console.info("[MEDIA] requesting camera + microphone");
       try {
         stream = await requestLocalMedia(mode);
+        if (lifecycle !== lifecycleRef.current) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
         const audioTrack = stream.getAudioTracks()[0];
         const videoTrack = stream.getVideoTracks()[0];
         if (!audioTrack || audioTrack.readyState !== "live") throw new Error("A live microphone track was not created.");
@@ -417,12 +507,13 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
         })));
         streamRef.current = stream;
         mediaReadyRef.current = true;
+        markTimeline("localMediaReady");
         setLocalStream(stream);
         setMicEnabled(true);
-        setCameraEnabled(mode === "video");
         setMediaPermission("granted");
         setMediaStatus("ready");
       } catch (mediaError) {
+        if (lifecycle !== lifecycleRef.current) return;
         stream?.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
         mediaReadyRef.current = false;
@@ -437,38 +528,47 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
         setPhase("failed");
         return;
       }
-    }
+      }
 
-    // Local preview is live at this point. Signaling and ICE setup are intentionally independent.
-    try {
-      const [signalingChannel, iceResponse] = await Promise.all([
-        signalingPromiseRef.current,
-        fetch(`/api/webrtc/ice-servers?roomId=${encodeURIComponent(roomId)}`, { cache: "no-store" }),
-      ]);
-      if (!signalingChannel || !channelRef.current) throw new Error("The private signaling channel is not ready yet. Try again in a moment.");
-      const iceData = await iceResponse.json() as IceServerResponse;
-      if (!iceResponse.ok || !iceData.iceServers?.length) throw new Error(iceData.error ?? "WebRTC network configuration is unavailable.");
+      // Local preview is live at this point. Signaling and ICE setup are intentionally independent.
+      try {
+        const [signalingChannel, iceResponse] = await Promise.all([
+          signalingPromiseRef.current,
+          fetch(`/api/webrtc/ice-servers?roomId=${encodeURIComponent(roomId)}`, { cache: "no-store" }),
+        ]);
+        if (lifecycle !== lifecycleRef.current) return;
+        if (!signalingChannel || !channelRef.current) throw new Error("The private signaling channel is not ready yet. Try again in a moment.");
+        const iceData = await iceResponse.json() as IceServerResponse;
+        if (!iceResponse.ok || !iceData.iceServers?.length) throw new Error(iceData.error ?? "WebRTC network configuration is unavailable.");
 
-      const peer = createPeer(iceData.iceServers, Boolean(iceData.forceRelay));
-      if (!peer.connection.getSenders().some((sender) => sender.track)) peer.addLocalStream(stream);
-      for (const candidate of pendingBeforePeerRef.current) await peer.addRemoteIceCandidate(candidate);
-      pendingBeforePeerRef.current = [];
-      setPhase(remoteReadyRef.current ? "signaling" : "waiting-for-peer");
-      await send({ kind: "peer-ready", mediaReady: true });
-      if (readyTimerRef.current) window.clearInterval(readyTimerRef.current);
-      readyTimerRef.current = window.setInterval(() => {
-        if (phaseRef.current !== "connected" && phaseRef.current !== "ended") {
-          void send({ kind: "peer-ready", mediaReady: true }).catch((readyError) => console.warn("[SIGNAL] ready heartbeat failed", readyError));
+        const peer = createPeer(iceData.iceServers, Boolean(iceData.forceRelay));
+        if (!peer.connection.getSenders().some((sender) => sender.track)) await peer.addLocalStream(stream, mode === "video");
+        for (const candidate of pendingBeforePeerRef.current) await peer.addRemoteIceCandidate(candidate);
+        pendingBeforePeerRef.current = [];
+        setPhase(remoteReadyRef.current ? "signaling" : "waiting-for-peer");
+        await send({ kind: "peer-ready", mediaReady: true });
+        if (readyTimerRef.current) window.clearInterval(readyTimerRef.current);
+        readyTimerRef.current = window.setInterval(() => {
+          if (phaseRef.current !== "connected" && phaseRef.current !== "ended") {
+            void send({ kind: "peer-ready", mediaReady: true }).catch((readyError) => console.warn("[SIGNAL] ready heartbeat failed", readyError));
+          }
+        }, 1_500);
+        if (DIAGNOSTICS_ENABLED) {
+          void refreshDiagnostics();
+          if (statsTimerRef.current) window.clearInterval(statsTimerRef.current);
+          statsTimerRef.current = window.setInterval(() => void refreshDiagnostics(), 1_000);
         }
-      }, 1_500);
-      statsTimerRef.current = window.setInterval(() => void refreshDiagnostics(), 1_000);
-      await maybeCreateOffer();
-    } catch (connectionError) {
-      console.error("[WEBRTC] setup failed after local media became ready", connectionError);
-      setError(connectionError instanceof Error ? connectionError.message : "The secure call setup failed.");
-      setPhase("failed");
+        await maybeCreateOffer();
+      } catch (connectionError) {
+        if (lifecycle !== lifecycleRef.current) return;
+        console.error("[WEBRTC] setup failed after local media became ready", connectionError);
+        setError(connectionError instanceof Error ? connectionError.message : "The secure call setup failed.");
+        setPhase("failed");
+      }
+    } finally {
+      if (mediaStartTokenRef.current === mediaStartToken) mediaStartTokenRef.current = null;
     }
-  }, [createPeer, enabled, maybeCreateOffer, mode, refreshDiagnostics, roomId, send]);
+  }, [createPeer, enabled, markTimeline, maybeCreateOffer, mode, refreshDiagnostics, roomId, send]);
 
   const toggleMic = useCallback(() => {
     setMicEnabled((currentlyEnabled) => {
@@ -480,33 +580,39 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
     });
   }, []);
 
-  const toggleCamera = useCallback(() => {
-    setCameraEnabled((currentlyEnabled) => {
-      const enabledNext = !currentlyEnabled;
-      streamRef.current?.getVideoTracks().forEach((track) => { track.enabled = enabledNext; });
-      peerRef.current?.toggleCamera(enabledNext);
-      return enabledNext;
-    });
-  }, []);
-
   const switchCamera = useCallback(async () => {
     const currentTrack = streamRef.current?.getVideoTracks()[0];
     if (!currentTrack) return;
     const facing = currentTrack.getSettings().facingMode === "environment" ? "user" : "environment";
+    let replacement: MediaStream | null = null;
     try {
-      const replacement = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: facing } }, audio: false });
+      replacement = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 24, max: 30 },
+          facingMode: { ideal: facing },
+        },
+        audio: false,
+      });
       const nextTrack = replacement.getVideoTracks()[0];
-      const sender = peerRef.current?.connection.getSenders().find((item) => item.track?.kind === "video");
-      await sender?.replaceTrack(nextTrack);
+      if (!nextTrack || !peerRef.current) throw new Error("The replacement camera track is unavailable.");
+      nextTrack.enabled = true;
+      await peerRef.current.replaceVideoTrack(nextTrack);
       currentTrack.stop();
       streamRef.current?.removeTrack(currentTrack);
       streamRef.current?.addTrack(nextTrack);
       setLocalStream(new MediaStream(streamRef.current?.getTracks() ?? []));
     } catch (switchError) {
+      replacement?.getTracks().forEach((track) => track.stop());
       console.error("[MEDIA] camera switch failed", switchError);
       setError("The other camera is not available on this device.");
     }
   }, []);
+
+  const markFirstRemoteVideoFrame = useCallback(() => {
+    markTimeline("firstRemoteVideoFrame");
+  }, [markTimeline]);
 
   const retryConnection = useCallback(async () => {
     if (!peerRef.current || !mediaReadyRef.current) {
@@ -540,7 +646,6 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
     localStream,
     remoteStream,
     micEnabled,
-    cameraEnabled,
     phase,
     statusMessage: statusMessage[phase],
     error,
@@ -549,6 +654,7 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
     mediaPermission,
     realtimeStatus,
     signalDiagnostics,
+    timeline,
     secureContext: typeof window === "undefined" ? false : window.isSecureContext,
     roomId,
     role: initiator ? "initiator" as const : "receiver" as const,
@@ -556,7 +662,7 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
     retryConnection,
     endConnection,
     toggleMic,
-    toggleCamera,
     switchCamera,
+    markFirstRemoteVideoFrame,
   };
 }

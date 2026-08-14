@@ -40,3 +40,62 @@
 - Voice and video now attach remote tracks to an unmuted, full-volume media element and expose a user-gesture playback fallback. Mute changes the outgoing audio track's `enabled` state without renegotiation.
 - Media rooms use a separate authorized `room:<uuid>:chat` topic for room-scoped messages and typing, so chat UI updates do not replace or replay the peer media stream.
 - Matchmaking ranks an eligible opposite-gender candidate first and falls back atomically to another eligible same-mode candidate when none is waiting.
+
+## Low-latency pass (2026-08-15)
+
+### Current media path
+
+```text
+getUserMedia (live microphone + 720p camera constraints)
+  -> MediaStreamTrack
+  -> RTCPeerConnection.addTrack before the initial offer
+  -> browser encoder / SRTP
+  -> selected direct or TURN ICE candidate pair
+  -> RTCPeerConnection.ontrack
+  -> the received MediaStream
+  -> video.srcObject
+  -> requestVideoFrameCallback first-display measurement
+```
+
+There is no `MediaRecorder`, Blob, base64, canvas, `MediaSource`, `SourceBuffer`, storage upload, API upload, database insert, or Supabase Broadcast path for media. Supabase Broadcast carries only readiness, SDP, ICE, restart, and room-end control messages.
+
+### Code-level startup-latency defect found
+
+The signaling channel was ephemeral but the result returned by `RealtimeChannel.send()` was ignored. An offer or answer returning `timed out` or `error` therefore looked successful to the WebRTC state machine. The initiator then remained in `have-local-offer`, with `offerStartedRef` preventing another offer, until the 20-second connection failure/retry path. Repeated failure or a manual retry could turn that single missed control message into a tens-of-seconds startup stall.
+
+Signaling Broadcast now requests acknowledgements and treats every non-`ok` result as a failure. While an initial offer is pending, the existing peer-ready heartbeat re-sends the same local SDP. The receiver handles the duplicate idempotently and re-sends its existing answer. This is signaling recovery only: it does not create another offer, renegotiate media, or create another `RTCPeerConnection`.
+
+### Media changes
+
+- Camera and microphone tracks are still added before `createOffer()`; video mode now asserts that both sender kinds exist.
+- Capture starts at an adaptive real-time target of 1280x720, 24 fps ideal and 30 fps maximum, with echo cancellation, noise suppression, and automatic gain control.
+- The video sender uses a 1.5 Mbps ceiling, a 30 fps ceiling, and `maintain-framerate` where supported. Failure is non-fatal so browser congestion control remains authoritative.
+- Camera and microphone buttons only change `MediaStreamTrack.enabled`. Camera switching uses `replaceTrack()` and stops only the superseded camera track.
+- The pending ICE queue and signaling messages are processed serially. Trickle ICE remains immediate; SDP is not held for ICE gathering completion.
+- Async media setup is lifecycle-guarded so React cleanup, Next, or End cannot resurrect an old stream or peer connection.
+
+### Development measurements
+
+The development-only performance panel samples `getStats()` once per second and reports:
+
+- connection, ICE, and signaling state;
+- P2P versus TURN, local and remote candidate types, UDP/TCP relay protocol;
+- RTT, available outgoing bitrate, measured incoming/outgoing bitrate;
+- packet loss, jitter, and average jitter-buffer delay;
+- send/receive dimensions and fps, encoded/decoded/dropped frames, quality limitation, and codec;
+- match, media-ready, signaling, SDP, first ICE, ICE-connected, peer-connected, first inbound packet, first decoded frame, and first displayed frame timestamps.
+
+`requestVideoFrameCallback()` records the actual first displayed remote video frame. Stats remain in browser memory and are not persisted.
+
+### Benchmark status
+
+No before/after network numbers are claimed from this code-only environment: it has no active Supabase deployment credentials, two live matched sessions, camera devices, or cross-network TURN path. Use the panel on two real devices and record the following for normal ICE and forced-relay development tests:
+
+| Test | Peer connected | First remote frame | RTT | Jitter | Jitter buffer | Loss | Route |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| Before (historical capture required) | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable |
+| Normal ICE / Wi-Fi to Wi-Fi | pending device test | pending | pending | pending | pending | pending | pending |
+| Normal ICE / Wi-Fi to mobile | pending device test | pending | pending | pending | pending | pending | pending |
+| Forced TURN / development only | pending device test | pending | pending | pending | pending | pending | pending |
+
+If first packet, decode, and display timestamps are close but RTT or jitter-buffer delay is large, the remaining cause is the selected network/TURN path. If peer connection is fast but the first packet is late, inspect sender encoding and outbound bandwidth. If packets arrive immediately but decode/display is late, inspect receiver CPU and codec behavior with `chrome://webrtc-internals`.

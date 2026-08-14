@@ -20,7 +20,7 @@ export const metadata: Metadata = {
     template: "%s · VibeConnect",
   },
   description:
-    "A safer, friendlier way to meet someone new through anonymous text, voice, and video conversations.",
+    "A safer, friendlier way to meet someone new through anonymous video conversations.",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",

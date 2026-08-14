@@ -8,8 +8,6 @@ import {
   Flag,
   HeartHandshake,
   LockKeyhole,
-  MessageCircleMore,
-  Mic2,
   ShieldCheck,
   Sparkles,
   UserRoundPlus,
@@ -22,30 +20,24 @@ import { SiteHeader } from "@/components/site-header";
 import { Button } from "@/components/ui/button";
 import { GlassCard } from "@/components/ui/glass-card";
 
-const modes = [
-  { icon: MessageCircleMore, label: "Text", tint: "text-[#79f5df]" },
-  { icon: Mic2, label: "Voice", tint: "text-[#bd9bff]" },
-  { icon: Camera, label: "Video", tint: "text-[#ff89c6]" },
-];
-
 const steps = [
   {
     number: "01",
     icon: UserRoundPlus,
     title: "Pick your vibe",
-    copy: "Choose a nickname, conversation mode, and a few interests. No account, no profile trail.",
+    copy: "Choose a nickname and gender. Every connection is face-to-face video, with no account or profile trail.",
   },
   {
     number: "02",
     icon: Zap,
     title: "Match in moments",
-    copy: "Our matching system looks for a compatible person who shares your energy.",
+    copy: "We look for an opposite-gender match first, then connect you with someone else when needed.",
   },
   {
     number: "03",
     icon: HeartHandshake,
     title: "Say hey",
-    copy: "Chat freely, stay respectful, and leave anytime. A new conversation is always one tap away.",
+    copy: "Keep your camera on, choose whether to use your microphone, and leave anytime.",
   },
 ];
 
@@ -87,12 +79,7 @@ export function LandingPage() {
             </div>
           </div>
           <div className="mt-9 flex flex-wrap gap-2">
-            {modes.map(({ icon: Icon, label, tint }) => (
-              <div key={label} className="glass-subtle flex items-center gap-2 rounded-full px-3 py-2 text-xs font-bold text-white/64">
-                <Icon className={`size-3.5 ${tint}`} />
-                {label}
-              </div>
-            ))}
+            <div className="glass-subtle flex items-center gap-2 rounded-full px-3 py-2 text-xs font-bold text-white/64"><Camera className="size-3.5 text-[#ff89c6]" /> Video always on</div>
           </div>
         </motion.div>
 
@@ -114,8 +101,8 @@ export function LandingPage() {
               <div className="relative mt-5 grid gap-3">
                 {[
                   { icon: UserRoundPlus, title: "You join the live queue", copy: "Your active browser session sends a heartbeat every 10 seconds." },
-                  { icon: HeartHandshake, title: "Another real person appears", copy: "We only propose someone online, searching, and using the same mode." },
-                  { icon: Check, title: "Both people accept", copy: "Only then is a private text, voice, or video room created." },
+                  { icon: HeartHandshake, title: "Another real person appears", copy: "Opposite-gender matches are preferred, with same-gender fallback when needed." },
+                  { icon: Check, title: "Both people accept", copy: "Only then is a private video room created." },
                 ].map(({ icon: Icon, title, copy }, index) => <div key={title} className="flex gap-4 rounded-[20px] border border-white/[0.07] bg-white/[0.035] p-4"><span className="grid size-10 shrink-0 place-items-center rounded-xl bg-white/[0.06] text-[#8df6e1]"><Icon className="size-[18px]" /></span><div><div className="flex items-center gap-2"><span className="text-[9px] font-black text-white/20">0{index + 1}</span><h3 className="text-xs font-extrabold">{title}</h3></div><p className="mt-1.5 text-[11px] leading-5 text-white/38">{copy}</p></div></div>)}
               </div>
             </div>
@@ -175,7 +162,7 @@ export function LandingPage() {
             </div>
             <div className="grid gap-3">
               {[
-                { icon: LockKeyhole, title: "Your media stays yours", copy: "Voice and video travel peer-to-peer. We never record or store a frame." },
+                { icon: LockKeyhole, title: "Your media stays yours", copy: "Video and optional microphone audio travel peer-to-peer. We never record or store a frame." },
                 { icon: Flag, title: "Report or block in one tap", copy: "Leave any conversation instantly and prevent future rematches." },
                 { icon: ShieldCheck, title: "Active text moderation", copy: "Harmful messages trigger warnings and repeat abuse leads to a temporary ban." },
               ].map(({ icon: Icon, title, copy }) => (

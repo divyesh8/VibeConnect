@@ -16,7 +16,7 @@ create table if not exists public.online_users (
     and username !~ '[[:cntrl:]]'
   ),
   gender text not null check (gender in ('male', 'female', 'other')),
-  communication_mode text not null check (communication_mode in ('text', 'voice', 'video')),
+  communication_mode text not null default 'video' check (communication_mode = 'video'),
   interests jsonb not null default '[]'::jsonb check (jsonb_typeof(interests) = 'array'),
   age_group text,
   status text not null default 'searching' check (status in ('searching', 'confirming', 'connected', 'offline')),
@@ -275,14 +275,9 @@ begin
     case
       when (requester.gender = 'male' and candidate_row.gender = 'female')
         or (requester.gender = 'female' and candidate_row.gender = 'male') then 0
-      else 1
+      when requester.gender = candidate_row.gender then 1
+      else 2
     end,
-    (
-      select count(*)
-      from jsonb_array_elements_text(requester.interests) requester_interest(value)
-      join jsonb_array_elements_text(candidate_row.interests) candidate_interest(value) using (value)
-    ) desc,
-    case when requester.age_group is not null and requester.age_group = candidate_row.age_group then 0 else 1 end,
     candidate_row.created_at asc
   limit 1
   for update of candidate_row skip locked;

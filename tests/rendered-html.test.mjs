@@ -49,9 +49,10 @@ test("database schema requires live two-person acceptance", async () => {
   assert.match(schema, /proposal\.user1_accepted and proposal\.user2_accepted/);
   assert.match(schema, /for update of candidate_row skip locked/);
   assert.match(schema, /requester\.gender = 'male' and candidate_row\.gender = 'female'/);
-  assert.match(candidateQuery, /then 0\s+else 1\s+end/);
-  assert.ok(candidateQuery.indexOf("requester.gender = 'male'") < candidateQuery.indexOf("jsonb_array_elements_text(requester.interests)"));
+  assert.match(candidateQuery, /then 0\s+when requester\.gender = candidate_row\.gender then 1\s+else 2\s+end/);
+  assert.doesNotMatch(candidateQuery, /jsonb_array_elements_text|age_group/);
   assert.doesNotMatch(candidateQuery.slice(0, candidateQuery.indexOf("order by")), /requester\.gender\s*=/);
+  assert.match(schema, /communication_mode = 'video'/);
   assert.match(schema, /room_members_one_active_room_per_user_idx/);
   assert.match(schema, /is_active_room_member/);
   assert.match(schema, /status = 'active', connected_at = coalesce/);
@@ -85,7 +86,7 @@ test("voice and video calls render audible remote media without replaying on cha
   const streamVideo = room.slice(room.indexOf("function StreamVideo"), room.indexOf("type MediaController"));
   assert.match(streamVideo, /}, \[muted, ref, stream\]\);/);
   assert.doesNotMatch(streamVideo, /\[muted, onPlaybackBlocked/);
-  assert.match(hook, /audio: true/);
+  assert.match(hook, /echoCancellation: true/);
   assert.match(hook, /track\.enabled = enabledNext/);
   assert.match(hook, /toggleMicrophone\(enabledNext\)/);
   assert.match(peer, /event\.streams\[0\]/);
@@ -128,7 +129,9 @@ test("local media preview is independent from Realtime subscription success", as
   assert.ok(requestIndex >= 0 && previewIndex > requestIndex && subscriptionIndex > previewIndex);
   assert.match(startMedia, /if \(!window\.isSecureContext\)/);
   assert.match(startMedia, /OverconstrainedError|requestLocalMedia/);
-  assert.match(hook, /audio: true,\s+video: mode === "video"/);
+  assert.match(hook, /echoCancellation: true/);
+  assert.match(hook, /width: \{ ideal: 1280 \}/);
+  assert.match(hook, /frameRate: \{ ideal: 24, max: 30 \}/);
   assert.match(realtime, /channel\.subscribe\(\(status, subscriptionError\)/);
   assert.match(realtime, /\[REALTIME\] FULL ERROR:/);
   assert.match(realtime, /ensureAnonymousAuth\(\)/);
@@ -177,7 +180,7 @@ test("guest profile is centralized and persists for the browser-tab session", as
   assert.doesNotMatch(matching, /getLocalProfile/);
   assert.match(room, /router\.replace\("\/matching"\)/);
   assert.match(room, /Find someone else/);
-  assert.match(room, /Change mode/);
+  assert.match(room, /Start again/);
   assert.match(profilePage, /Exit \/ reset profile/);
 });
 
@@ -223,11 +226,47 @@ test("client, API, and database share permissive display-name limits", async () 
   assert.doesNotMatch(allComponents, /dangerouslySetInnerHTML/);
 });
 
-test("mode changes update preferences without changing guest identity", async () => {
+test("sessions are forced to video without interest preferences", async () => {
   const route = await readFile(new URL("app/api/session/route.ts", root), "utf8");
   const patchHandler = route.slice(route.indexOf("export async function PATCH"));
-  assert.match(patchHandler, /communication_mode: parsed\.data\.mode/);
-  assert.match(patchHandler, /interests: parsed\.data\.interests/);
+  assert.match(patchHandler, /communication_mode: "video"/);
+  assert.match(patchHandler, /interests: \[\]/);
   assert.doesNotMatch(patchHandler, /username:/);
   assert.doesNotMatch(patchHandler, /gender:/);
+});
+
+test("setup offers mandatory video and calls cannot disable the camera", async () => {
+  const [setup, room, hook] = await Promise.all([
+    readFile(new URL("components/setup-form.tsx", root), "utf8"),
+    readFile(new URL("components/chat-room.tsx", root), "utf8"),
+    readFile(new URL("hooks/use-webrtc.ts", root), "utf8"),
+  ]);
+  assert.match(setup, /Video connection/);
+  assert.doesNotMatch(setup, /Text chat|Voice chat|What are you into\?|Pick up to 5|INTERESTS|MODES/);
+  assert.match(room, /media\.toggleMic/);
+  assert.doesNotMatch(room, /toggleCamera|Turn off camera|CameraOff/);
+  assert.doesNotMatch(hook, /toggleCamera|setCameraEnabled/);
+});
+
+test("WebRTC media stays direct, trickles ICE, and exposes low-latency diagnostics", async () => {
+  const [room, hook, peer, realtime] = await Promise.all([
+    readFile(new URL("components/chat-room.tsx", root), "utf8"),
+    readFile(new URL("hooks/use-webrtc.ts", root), "utf8"),
+    readFile(new URL("webrtc/peer-manager.ts", root), "utf8"),
+    readFile(new URL("services/realtime.ts", root), "utf8"),
+  ]);
+  assert.match(room, /element\.srcObject = stream/);
+  assert.match(room, /requestVideoFrameCallback/);
+  assert.match(room, /diagnosticsVisible = process\.env\.NODE_ENV === "development"/);
+  assert.doesNotMatch(room, /NEXT_PUBLIC_WEBRTC_DIAGNOSTICS/);
+  assert.doesNotMatch(`${room}\n${hook}\n${peer}`, /MediaRecorder|MediaSource|SourceBuffer|toDataURL|toBlob/);
+  assert.match(peer, /this\.connection\.addTrack\(track, stream\)/);
+  assert.match(peer, /emitSignal\(\{ kind: "ice-candidate"/);
+  assert.doesNotMatch(peer, /waitForIceGatheringComplete|iceGatheringState !== "complete"/);
+  assert.match(peer, /maxBitrate = 1_500_000/);
+  assert.match(peer, /degradationPreference = "maintain-framerate"/);
+  assert.match(peer, /jitterBufferDelay/);
+  assert.match(peer, /currentRoundTripTime/);
+  assert.match(realtime, /broadcast: \{ self: false, ack: purpose === "signaling" \}/);
+  assert.match(realtime, /if \(status !== "ok"\)/);
 });

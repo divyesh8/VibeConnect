@@ -36,8 +36,8 @@ export async function POST(request: NextRequest) {
     session_token_hash: tokenHash,
     username: parsed.data.username,
     gender: parsed.data.gender,
-    communication_mode: parsed.data.mode,
-    interests: parsed.data.interests,
+    communication_mode: "video",
+    interests: [],
     status: "searching",
     last_seen: createdAt,
     created_at: createdAt,
@@ -50,8 +50,8 @@ export async function POST(request: NextRequest) {
       sessionId,
       username: parsed.data.username,
       gender: parsed.data.gender,
-      mode: parsed.data.mode,
-      interests: parsed.data.interests,
+      mode: "video",
+      interests: [],
       createdAt,
     },
   }, { status: 201 });
@@ -71,8 +71,8 @@ export async function PATCH(request: NextRequest) {
   const { data, error } = await supabase
     .from("online_users")
     .update({
-      communication_mode: parsed.data.mode,
-      interests: parsed.data.interests,
+      communication_mode: "video",
+      interests: [],
       status: "searching",
       last_seen: new Date().toISOString(),
     })
@@ -81,6 +81,6 @@ export async function PATCH(request: NextRequest) {
     .select("id")
     .maybeSingle();
   if (error) return NextResponse.json({ error: "Your communication preferences could not be updated." }, { status: 503 });
-  if (!data) return NextResponse.json({ error: "End the current conversation before changing modes." }, { status: 409 });
-  return NextResponse.json({ updated: true, mode: parsed.data.mode, interests: parsed.data.interests });
+  if (!data) return NextResponse.json({ error: "End the current conversation before starting another video call." }, { status: 409 });
+  return NextResponse.json({ updated: true, mode: "video", interests: [] });
 }

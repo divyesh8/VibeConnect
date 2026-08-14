@@ -13,7 +13,7 @@ function isStoredProfile(value: unknown): value is AnonymousProfile {
     && username === username.trim()
     && displayNameValidationError(username) === null
     && ["male", "female", "other"].includes(String(profile.gender))
-    && ["text", "voice", "video"].includes(String(profile.mode))
+    && profile.mode === "video"
     && Array.isArray(profile.interests)
     && profile.interests.every((interest) => typeof interest === "string")
     && typeof profile.createdAt === "string";

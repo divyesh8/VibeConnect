@@ -5,7 +5,6 @@ import {
   ArrowRight,
   Ban,
   Camera,
-  CameraOff,
   CheckCheck,
   ChevronDown,
   Flag,
@@ -47,25 +46,49 @@ const reportReasons: { value: ReportReason; label: string }[] = [
   { value: "other", label: "Other" },
 ];
 
-function StreamVideo({ stream, muted = false, className, onPlaybackBlocked, videoRef }: { stream: MediaStream | null; muted?: boolean; className?: string; onPlaybackBlocked?: () => void; videoRef?: React.RefObject<HTMLVideoElement | null> }) {
+function StreamVideo({ stream, muted = false, className, onPlaybackBlocked, onFirstFrame, videoRef }: { stream: MediaStream | null; muted?: boolean; className?: string; onPlaybackBlocked?: () => void; onFirstFrame?: () => void; videoRef?: React.RefObject<HTMLVideoElement | null> }) {
   const internalRef = useRef<HTMLVideoElement>(null);
   const playbackBlockedRef = useRef(onPlaybackBlocked);
+  const firstFrameRef = useRef(onFirstFrame);
   const ref = videoRef ?? internalRef;
   useEffect(() => {
     playbackBlockedRef.current = onPlaybackBlocked;
   }, [onPlaybackBlocked]);
   useEffect(() => {
+    firstFrameRef.current = onFirstFrame;
+  }, [onFirstFrame]);
+  useEffect(() => {
     const element = ref.current;
     if (!element) return;
+    let frameCallbackId: number | null = null;
+    let firstFrameReported = false;
+    const reportFirstFrame = () => {
+      if (firstFrameReported || element.videoWidth <= 0 || element.videoHeight <= 0) return;
+      firstFrameReported = true;
+      firstFrameRef.current?.();
+    };
     element.srcObject = stream;
     element.muted = muted;
     element.defaultMuted = muted;
     element.volume = muted ? 0 : 1;
+    if (stream && firstFrameRef.current) {
+      if (typeof element.requestVideoFrameCallback === "function") {
+        frameCallbackId = element.requestVideoFrameCallback(() => reportFirstFrame());
+      } else {
+        element.addEventListener("loadeddata", reportFirstFrame);
+        element.addEventListener("playing", reportFirstFrame);
+        element.addEventListener("resize", reportFirstFrame);
+      }
+    }
     if (stream) void element.play().catch((error) => {
       console.error(`[MEDIA] ${muted ? "local" : "remote"} video play failed`, error);
       playbackBlockedRef.current?.();
     });
     return () => {
+      if (frameCallbackId !== null && typeof element.cancelVideoFrameCallback === "function") element.cancelVideoFrameCallback(frameCallbackId);
+      element.removeEventListener("loadeddata", reportFirstFrame);
+      element.removeEventListener("playing", reportFirstFrame);
+      element.removeEventListener("resize", reportFirstFrame);
       if (element.srcObject === stream) element.srcObject = null;
     };
   }, [muted, ref, stream]);
@@ -76,12 +99,24 @@ function StreamVideo({ stream, muted = false, className, onPlaybackBlocked, vide
 
 type MediaController = ReturnType<typeof useWebRTC>;
 
+function metric(value: number | null | undefined, suffix = "") {
+  return value === null || value === undefined ? "—" : `${Math.round(value)}${suffix}`;
+}
+
+function videoFormat(width: number | null | undefined, height: number | null | undefined, fps: number | null | undefined) {
+  if (!width || !height) return "—";
+  return `${width}×${height} @ ${fps === null || fps === undefined ? "—" : Math.round(fps)}fps`;
+}
+
 function MediaStage({ profile, partner, mode, media, chatOpen, onToggleChat, onNext, onReport, onEnd }: { profile: AnonymousProfile; partner: LiveRoomContext["partner"]; mode: CommunicationMode; media: MediaController; chatOpen: boolean; onToggleChat: () => void; onNext: () => void; onReport: () => void; onEnd: () => void }) {
   const [playbackBlocked, setPlaybackBlocked] = useState(false);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const connected = media.phase === "connected";
   const remoteAudioLive = media.remoteStream?.getAudioTracks().some((track) => track.readyState === "live") ?? false;
-  const diagnosticsVisible = process.env.NODE_ENV === "development" || process.env.NEXT_PUBLIC_WEBRTC_DIAGNOSTICS === "true";
+  const diagnosticsVisible = process.env.NODE_ENV === "development";
+  const firstFrameAfterConnected = media.timeline.firstRemoteVideoFrame !== undefined && media.timeline.peerConnected !== undefined
+    ? Math.max(0, media.timeline.firstRemoteVideoFrame - media.timeline.peerConnected)
+    : null;
 
   async function enablePartnerAudio() {
     const remoteVideo = remoteVideoRef.current;
@@ -103,14 +138,14 @@ function MediaStage({ profile, partner, mode, media, chatOpen, onToggleChat, onN
       {mode === "video" ? (
         <div className="relative grid min-h-[430px] flex-1 gap-2 p-2 md:grid-cols-2">
           <div className="relative overflow-hidden rounded-[19px] border border-white/[0.08] bg-gradient-to-br from-[#203d40] to-[#101416]">
-            {media.remoteStream ? <StreamVideo stream={media.remoteStream} muted={false} videoRef={remoteVideoRef} className="absolute inset-0 size-full object-cover" onPlaybackBlocked={() => setPlaybackBlocked(true)} /> : <><div className="absolute left-1/2 top-1/2 size-72 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#78f7df]/10 blur-[80px]" /><div className="absolute left-1/2 top-1/2 grid size-28 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-[38px] bg-gradient-to-br from-[#78f7df] to-[#587dff] font-display text-3xl font-black text-[#071313] shadow-2xl">{initials(partner.username)}</div><p className="absolute bottom-16 left-1/2 -translate-x-1/2 text-[10px] font-bold text-white/42">{media.statusMessage}</p></>}
+            {media.remoteStream ? <StreamVideo stream={media.remoteStream} muted={false} videoRef={remoteVideoRef} className="absolute inset-0 size-full object-cover" onPlaybackBlocked={() => setPlaybackBlocked(true)} onFirstFrame={media.markFirstRemoteVideoFrame} /> : <><div className="absolute left-1/2 top-1/2 size-72 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#78f7df]/10 blur-[80px]" /><div className="absolute left-1/2 top-1/2 grid size-28 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-[38px] bg-gradient-to-br from-[#78f7df] to-[#587dff] font-display text-3xl font-black text-[#071313] shadow-2xl">{initials(partner.username)}</div><p className="absolute bottom-16 left-1/2 -translate-x-1/2 text-[10px] font-bold text-white/42">{media.statusMessage}</p></>}
             <div className="absolute bottom-4 left-4 flex items-center gap-2 rounded-full bg-black/35 px-3 py-1.5 text-xs font-bold backdrop-blur-md"><span className="status-dot !size-1.5" /> {partner.username}</div>
             <div className="absolute right-4 top-4 flex h-8 items-end gap-1 rounded-full bg-black/30 px-3 py-2 backdrop-blur-md">
               {[1, 2, 3, 4].map((bar) => <span key={bar} className="signal-bar !w-[3px]" />)}
             </div>
           </div>
           <div className="relative overflow-hidden rounded-[19px] border border-white/[0.08] bg-gradient-to-br from-[#2f1e4b] to-[#121019]">
-            {media.localStream && media.cameraEnabled ? (
+            {media.localStream ? (
               <StreamVideo stream={media.localStream} muted className="absolute inset-0 size-full object-cover [transform:scaleX(-1)]" />
             ) : (
               <>
@@ -119,7 +154,6 @@ function MediaStage({ profile, partner, mode, media, chatOpen, onToggleChat, onN
               </>
             )}
             <div className="absolute bottom-4 left-4 flex items-center gap-2 rounded-full bg-black/35 px-3 py-1.5 text-xs font-bold backdrop-blur-md">You</div>
-            {!media.cameraEnabled && <div className="absolute right-4 top-4 grid size-8 place-items-center rounded-full bg-black/35 backdrop-blur-md"><CameraOff className="size-3.5" /></div>}
           </div>
         </div>
       ) : (
@@ -150,14 +184,7 @@ function MediaStage({ profile, partner, mode, media, chatOpen, onToggleChat, onN
             <Button variant={media.micEnabled ? "secondary" : "danger"} size="icon" onClick={media.toggleMic} aria-label={media.micEnabled ? "Mute microphone" : "Unmute microphone"}>
               {media.micEnabled ? <Mic className="size-4" /> : <MicOff className="size-4" />}
             </Button>
-            {mode === "video" && (
-              <>
-                <Button variant={media.cameraEnabled ? "secondary" : "danger"} size="icon" onClick={media.toggleCamera} aria-label={media.cameraEnabled ? "Turn off camera" : "Turn on camera"}>
-                  {media.cameraEnabled ? <Camera className="size-4" /> : <CameraOff className="size-4" />}
-                </Button>
-                <Button variant="secondary" size="icon" onClick={media.switchCamera} aria-label="Switch camera"><FlipHorizontal2 className="size-4" /></Button>
-              </>
-            )}
+            {mode === "video" && <Button variant="secondary" size="icon" onClick={media.switchCamera} aria-label="Switch camera"><FlipHorizontal2 className="size-4" /></Button>}
             <Button variant="secondary" onClick={onNext}><RotateCcw className="size-4" /> Next</Button>
             <Button variant="secondary" size="icon" onClick={onReport} aria-label="Report stranger"><Flag className="size-4" /></Button>
             <Button variant="danger" size="icon" onClick={onEnd} aria-label="End call"><PhoneOff className="size-4" /></Button>
@@ -171,13 +198,18 @@ function MediaStage({ profile, partner, mode, media, chatOpen, onToggleChat, onN
       </div>
       {diagnosticsVisible && (
         <details className="border-t border-white/[0.07] bg-black/35 px-4 py-2 text-[9px] text-white/45">
-          <summary className="cursor-pointer font-bold text-white/55">WebRTC diagnostics · {media.diagnostics?.candidateType ?? "not-started"}</summary>
+          <summary className="cursor-pointer font-bold text-white/55">WebRTC performance · {media.diagnostics?.route ?? "not-started"}</summary>
           <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-4">
             <span>Permission: {media.mediaPermission}</span><span>Secure: {media.secureContext ? "yes" : "no"}</span><span>Media: {media.mediaStatus}</span><span>Realtime: {media.realtimeStatus}</span>
             <span className="truncate" title={media.roomId}>Room: {media.roomId}</span><span>Role: {media.role}</span><span>Peer ready: {media.signalDiagnostics.peerReady}</span><span>Signal: {media.diagnostics?.signalingState ?? "unavailable"}</span>
             <span>Offer: {media.signalDiagnostics.offer}</span><span>Answer: {media.signalDiagnostics.answer}</span><span>Local ICE: {media.signalDiagnostics.localIce}</span><span>Remote ICE: {media.signalDiagnostics.remoteIce}</span>
             <span>ICE: {media.diagnostics?.iceConnectionState ?? "unavailable"}</span><span>Peer: {media.diagnostics?.connectionState ?? "unavailable"}</span><span>Local A/V: {media.diagnostics?.localAudio ?? "missing"}/{media.diagnostics?.localVideo ?? "missing"}</span><span>Remote A/V: {media.diagnostics?.remoteAudio ?? "missing"}/{media.diagnostics?.remoteVideo ?? "missing"}</span>
-            <span>Sent: {media.diagnostics?.packetsSent ?? 0} pkts</span><span>Received: {media.diagnostics?.packetsReceived ?? 0} pkts</span>
+            <span>Route: {media.diagnostics?.route ?? "unknown"}</span><span>Candidates: {media.diagnostics?.localCandidateType ?? "unknown"} → {media.diagnostics?.remoteCandidateType ?? "unknown"}</span><span>Transport: {media.diagnostics?.relayProtocol ?? media.diagnostics?.protocol ?? "—"}</span><span>Codec: {media.diagnostics?.codec ?? "—"}</span>
+            <span>RTT: {metric(media.diagnostics?.rttMs, "ms")}</span><span>Incoming jitter: {metric(media.diagnostics?.jitterMs, "ms")}</span><span>Jitter buffer: {metric(media.diagnostics?.jitterBufferMs, "ms")}</span><span>Packet loss: {metric(media.diagnostics?.packetLossPercent, "%")}</span>
+            <span>Outgoing: {metric(media.diagnostics?.outgoingBitrateKbps, " kbps")}</span><span>Incoming: {metric(media.diagnostics?.incomingBitrateKbps, " kbps")}</span><span>Available out: {metric(media.diagnostics?.availableOutgoingBitrateKbps, " kbps")}</span><span>Lost: {media.diagnostics?.packetsLost ?? 0} pkts</span>
+            <span>Video send: {videoFormat(media.diagnostics?.videoOutbound.frameWidth, media.diagnostics?.videoOutbound.frameHeight, media.diagnostics?.videoOutbound.framesPerSecond)}</span><span>Video receive: {videoFormat(media.diagnostics?.videoInbound.frameWidth, media.diagnostics?.videoInbound.frameHeight, media.diagnostics?.videoInbound.framesPerSecond)}</span><span>Dropped frames: {media.diagnostics?.videoInbound.framesDropped ?? 0}</span><span>Quality limit: {media.diagnostics?.videoOutbound.qualityLimitationReason ?? "—"}</span>
+            <span>First frame after peer: {metric(firstFrameAfterConnected, "ms")}</span><span>Match → media: {metric(media.timeline.localMediaReady, "ms")}</span><span>Match → ICE: {metric(media.timeline.iceConnected, "ms")}</span><span>Match → peer: {metric(media.timeline.peerConnected, "ms")}</span>
+            <span>Offer sent/received: {metric(media.timeline.offerSent, "ms")} / {metric(media.timeline.offerReceived, "ms")}</span><span>Answer sent/received: {metric(media.timeline.answerSent, "ms")} / {metric(media.timeline.answerReceived, "ms")}</span><span>First packet/decode: {metric(media.timeline.firstInboundVideoPacket, "ms")} / {metric(media.timeline.firstDecodedVideoFrame, "ms")}</span><span>Match → displayed: {metric(media.timeline.firstRemoteVideoFrame, "ms")}</span>
           </div>
         </details>
       )}
@@ -350,14 +382,11 @@ export function ChatRoom({ roomId }: { roomId: string }) {
   }
 
   const isText = liveRoom.mode === "text";
-  const sharedInterests = profile.interests.filter((interest) => liveRoom.partner.interests.includes(interest));
-  const connectionSummary = sharedInterests.length
-    ? `Shared: ${sharedInterests.join(" + ")}`
-    : isText
-      ? "Matched in text mode"
-      : media.phase === "connected"
-        ? `${liveRoom.mode === "video" ? "Video" : "Voice"} connected`
-        : `Matched · ${liveRoom.mode} call not connected`;
+  const connectionSummary = isText
+    ? "Matched in text mode"
+    : media.phase === "connected"
+      ? `${liveRoom.mode === "video" ? "Video" : "Voice"} connected`
+      : `Matched · ${liveRoom.mode} call not connected`;
 
   return (
     <main className="app-page flex h-[100dvh] flex-col overflow-hidden p-3 sm:p-4">
@@ -416,9 +445,6 @@ export function ChatRoom({ roomId }: { roomId: string }) {
               <div className="profile-gradient-1 grid size-12 place-items-center rounded-2xl font-display text-sm font-black">{initials(profile.username)}</div>
               <div><p className="text-sm font-extrabold">{profile.username}</p><p className="mt-0.5 text-[10px] capitalize text-white/30">{liveRoom.mode} · anonymous</p></div>
             </div>
-            <div className="mt-5 flex flex-wrap gap-1.5">
-              {(profile.interests.length ? profile.interests : ["Random"]).map((interest) => <span key={interest} className="rounded-full border border-white/[0.07] bg-white/[0.04] px-2.5 py-1 text-[9px] font-bold text-white/36">{interest}</span>)}
-            </div>
           </GlassCard>
 
           <GlassCard className="rounded-[26px] p-5">
@@ -433,7 +459,7 @@ export function ChatRoom({ roomId }: { roomId: string }) {
             </div>
           </GlassCard>
 
-          <div className="mt-auto rounded-[22px] border border-[#78f7df]/10 bg-[#78f7df]/[0.04] p-4 text-[10px] leading-4 text-white/32"><ShieldCheck className="mb-2 size-4 text-[#78f7df]" />Voice and video are peer-to-peer. They are never recorded or stored by VibeConnect.</div>
+          <div className="mt-auto rounded-[22px] border border-[#78f7df]/10 bg-[#78f7df]/[0.04] p-4 text-[10px] leading-4 text-white/32"><ShieldCheck className="mb-2 size-4 text-[#78f7df]" />Video and microphone audio are peer-to-peer. They are never recorded or stored by VibeConnect.</div>
         </aside>
       </div>
 
@@ -461,13 +487,13 @@ export function ChatRoom({ roomId }: { roomId: string }) {
               <div className="mx-auto grid size-20 place-items-center rounded-[26px] border border-white/10 bg-white/[0.06]"><PhoneOff className="size-7 text-white/60" /></div>
               <div className="eyebrow mt-7"><span className="size-1.5 rounded-full bg-white/25" /> {endedByPartner ? "Partner left" : "Conversation ended"}</div>
               <h2 className="mt-4 font-display text-4xl font-semibold tracking-[-.055em]">{endedByPartner ? "Stranger disconnected" : "Good chat?"}</h2>
-              <p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-white/38">{endedByPartner ? "The other person left the room. You can safely find someone new." : "Your chat history is saved securely. Voice and video were never stored."}</p>
+              <p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-white/38">{endedByPartner ? "The other person left the room. You can safely find someone new." : "Your chat history is saved securely. Video and microphone audio were never stored."}</p>
               <div className="mt-7 flex justify-center gap-2">
                 {['😕', '🙂', '✨'].map((emoji) => <button key={emoji} className="glass-subtle grid size-12 place-items-center rounded-2xl text-xl transition hover:-translate-y-1 hover:bg-white/[0.08]">{emoji}</button>)}
               </div>
               <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
                 <Button onClick={() => router.push("/matching")} size="lg"><RotateCcw className="size-4" /> Find someone else</Button>
-                <Button onClick={() => router.push("/start")} variant="secondary" size="lg">Change mode</Button>
+                <Button onClick={() => router.push("/start")} variant="secondary" size="lg">Start again</Button>
                 <Button onClick={() => void exitGuestSession()} variant="ghost" size="lg" className="text-white/40 hover:text-rose-200">Exit</Button>
               </div>
             </motion.div>

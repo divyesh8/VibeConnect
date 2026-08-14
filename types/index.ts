@@ -93,4 +93,76 @@ export interface WebRTCDiagnostics {
   framesEncoded: number;
   framesDecoded: number;
   candidateType: "host" | "srflx" | "prflx" | "relay" | "unknown";
+  localCandidateType: "host" | "srflx" | "prflx" | "relay" | "unknown";
+  remoteCandidateType: "host" | "srflx" | "prflx" | "relay" | "unknown";
+  route: "P2P" | "TURN" | "unknown";
+  protocol: string | null;
+  relayProtocol: string | null;
+  rttMs: number | null;
+  availableOutgoingBitrateKbps: number | null;
+  outgoingBitrateKbps: number | null;
+  incomingBitrateKbps: number | null;
+  packetsLost: number;
+  packetLossPercent: number | null;
+  jitterMs: number | null;
+  jitterBufferMs: number | null;
+  codec: string | null;
+  videoOutbound: {
+    bytesSent: number;
+    packetsSent: number;
+    framesEncoded: number;
+    framesSent: number;
+    framesPerSecond: number | null;
+    frameWidth: number | null;
+    frameHeight: number | null;
+    bitrateKbps: number | null;
+    qualityLimitationReason: string | null;
+  };
+  videoInbound: {
+    bytesReceived: number;
+    packetsReceived: number;
+    packetsLost: number;
+    framesReceived: number;
+    framesDecoded: number;
+    framesDropped: number;
+    framesPerSecond: number | null;
+    frameWidth: number | null;
+    frameHeight: number | null;
+    bitrateKbps: number | null;
+    jitterMs: number | null;
+    jitterBufferMs: number | null;
+  };
+  audioOutbound: {
+    bytesSent: number;
+    packetsSent: number;
+    bitrateKbps: number | null;
+  };
+  audioInbound: {
+    bytesReceived: number;
+    packetsReceived: number;
+    packetsLost: number;
+    bitrateKbps: number | null;
+    jitterMs: number | null;
+    jitterBufferMs: number | null;
+  };
 }
+
+export type WebRTCTimeline = Partial<Record<
+  | "matched"
+  | "localMediaReady"
+  | "signalingSubscribed"
+  | "offerSent"
+  | "offerReceived"
+  | "answerSent"
+  | "answerReceived"
+  | "firstLocalIce"
+  | "firstRemoteIce"
+  | "iceConnected"
+  | "peerConnected"
+  | "firstRemoteAudioTrack"
+  | "firstRemoteVideoTrack"
+  | "firstInboundVideoPacket"
+  | "firstDecodedVideoFrame"
+  | "firstRemoteVideoFrame",
+  number
+>>;
