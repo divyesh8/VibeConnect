@@ -120,7 +120,7 @@ function MediaStage({ profile, partner, mode, media, chatOpen, anotherVibeStatus
   const [playbackBlocked, setPlaybackBlocked] = useState(false);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const connected = media.phase === "connected";
-  const remoteAudioLive = media.remoteStream?.getAudioTracks().some((track) => track.readyState === "live") ?? false;
+  const remoteAudioNegotiated = media.remoteStream?.getAudioTracks().some((track) => track.readyState === "live") ?? false;
   const diagnosticsVisible = process.env.NODE_ENV === "development";
   const firstFrameAfterConnected = media.timeline.firstRemoteVideoFrame !== undefined && media.timeline.peerConnected !== undefined
     ? Math.max(0, media.timeline.firstRemoteVideoFrame - media.timeline.peerConnected)
@@ -200,7 +200,8 @@ function MediaStage({ profile, partner, mode, media, chatOpen, anotherVibeStatus
         )}
         <Button variant={chatOpen ? "secondary" : "ghost"} onClick={onToggleChat} aria-label="Toggle text chat"><MessageCircle className="size-4" /> Chat</Button>
         <p className={cn("w-full pt-1 text-center text-[10px] font-bold", connected ? "text-[#78f7df]" : "text-white/42")}>{media.statusMessage}</p>
-        {media.localStream && <p className="w-full text-center text-[9px] font-semibold text-white/30">Microphone {media.micEnabled ? "on" : "muted"} · Partner audio {remoteAudioLive ? "available" : "waiting"}</p>}
+        {media.localStream && <p className="w-full text-center text-[9px] font-semibold text-white/30">Microphone {media.micEnabled ? "on" : "muted"} · Partner audio {connected ? "connected" : remoteAudioNegotiated ? "negotiated, waiting for network" : "waiting"}</p>}
+        {media.turnConfigured === false && !connected && <p className="w-full text-center text-[10px] font-bold text-amber-200">TURN relay is not configured. Mobile and restrictive networks may not connect.</p>}
         {media.error && <div className="flex w-full flex-wrap items-center justify-center gap-2"><p className="text-center text-[10px] font-bold text-rose-300">{media.error}</p>{media.localStream && <Button variant="secondary" size="sm" onClick={media.retryConnection}>Retry</Button>}</div>}
         {playbackBlocked && <button onClick={() => void enablePartnerAudio()} className="w-full text-center text-xs font-bold text-amber-200">Enable partner audio</button>}
       </div>
