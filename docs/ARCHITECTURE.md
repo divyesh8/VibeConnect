@@ -26,9 +26,11 @@ All application tables use RLS. Direct table writes are revoked; validated serve
 
 A candidate creates only a time-limited `match_proposals` row and moves both users into `confirming`. Each browser must call `accept_real_match`; only when both live sessions accept does PostgreSQL atomically create the room, add both memberships, and mark both users connected. A decline, timeout, cancellation, lost heartbeat, or closed browser returns any remaining live user to searching. There is no generated identity or automated conversation path.
 
+During a live call, **Another Vibe** creates a replacement proposal with the requester already accepted while leaving the current room and media connection active. If nobody eligible is waiting, or the candidate declines or times out, the proposal changes no room state and the original call continues. Only after the replacement accepts does one transaction end the old room, deactivate its memberships, create the new room, and move both accepted users into it.
+
 ## Realtime chat
 
-Text writes pass through `/api/messages`, where active membership, room scope, length, normalization, rate limiting, and moderation are checked before insertion. Supabase Realtime streams inserted messages to authorized room members. Text, voice, and video rooms all use the same chat panel and room-scoped history. Typing status uses ephemeral Realtime Broadcast and is never written to the database.
+Text writes pass through `/api/messages`, where active membership, room scope, length, normalization, rate limiting, and moderation are checked before insertion. Local high-risk moderation runs first; provider moderation has a strict latency bound and falls back to the local guard if unavailable. After persistence, the sender broadcasts only a message ID on the private room-chat topic. The receiver fetches that exact persisted row through the membership-authorized API before rendering it. Supabase Postgres Changes remains a deduplicated fallback, so a delayed replication event cannot delay the normal delivery path and a forged client Broadcast cannot inject unmoderated text. Text, voice, and video rooms all use the same chat panel and room-scoped history. Typing status uses ephemeral Realtime Broadcast and is never written to the database.
 
 ## WebRTC flow
 

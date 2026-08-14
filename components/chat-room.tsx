@@ -34,7 +34,7 @@ import { useRoomChat } from "@/hooks/use-room-chat";
 import { useSessionHeartbeat } from "@/hooks/use-session-heartbeat";
 import { useWebRTC } from "@/hooks/use-webrtc";
 import { cn, initials } from "@/lib/utils";
-import type { AnonymousProfile, ChatMessage, CommunicationMode, LiveRoomContext, ReportReason } from "@/types";
+import type { AnonymousProfile, ChatMessage, CommunicationMode, LiveRoomContext, MatchProposalStatus, ReportReason } from "@/types";
 
 const reportReasons: { value: ReportReason; label: string }[] = [
   { value: "harassment", label: "Harassment" },
@@ -98,6 +98,14 @@ function StreamVideo({ stream, muted = false, className, onPlaybackBlocked, onFi
 }
 
 type MediaController = ReturnType<typeof useWebRTC>;
+type AnotherVibeStatus = "idle" | "checking" | "waiting" | "switching";
+
+function anotherVibeLabel(status: AnotherVibeStatus) {
+  if (status === "checking") return "Checking...";
+  if (status === "waiting") return "Vibe found...";
+  if (status === "switching") return "Switching...";
+  return "Another Vibe";
+}
 
 function metric(value: number | null | undefined, suffix = "") {
   return value === null || value === undefined ? "—" : `${Math.round(value)}${suffix}`;
@@ -108,7 +116,7 @@ function videoFormat(width: number | null | undefined, height: number | null | u
   return `${width}×${height} @ ${fps === null || fps === undefined ? "—" : Math.round(fps)}fps`;
 }
 
-function MediaStage({ profile, partner, mode, media, chatOpen, onToggleChat, onNext, onReport, onEnd }: { profile: AnonymousProfile; partner: LiveRoomContext["partner"]; mode: CommunicationMode; media: MediaController; chatOpen: boolean; onToggleChat: () => void; onNext: () => void; onReport: () => void; onEnd: () => void }) {
+function MediaStage({ profile, partner, mode, media, chatOpen, anotherVibeStatus, onToggleChat, onAnotherVibe, onReport, onEnd }: { profile: AnonymousProfile; partner: LiveRoomContext["partner"]; mode: CommunicationMode; media: MediaController; chatOpen: boolean; anotherVibeStatus: AnotherVibeStatus; onToggleChat: () => void; onAnotherVibe: () => void; onReport: () => void; onEnd: () => void }) {
   const [playbackBlocked, setPlaybackBlocked] = useState(false);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const connected = media.phase === "connected";
@@ -185,7 +193,7 @@ function MediaStage({ profile, partner, mode, media, chatOpen, onToggleChat, onN
               {media.micEnabled ? <Mic className="size-4" /> : <MicOff className="size-4" />}
             </Button>
             {mode === "video" && <Button variant="secondary" size="icon" onClick={media.switchCamera} aria-label="Switch camera"><FlipHorizontal2 className="size-4" /></Button>}
-            <Button variant="secondary" onClick={onNext}><RotateCcw className="size-4" /> Next</Button>
+            <Button variant="secondary" disabled={anotherVibeStatus !== "idle"} onClick={onAnotherVibe}><RotateCcw className={cn("size-4", anotherVibeStatus === "checking" && "animate-spin")} /> {anotherVibeLabel(anotherVibeStatus)}</Button>
             <Button variant="secondary" size="icon" onClick={onReport} aria-label="Report stranger"><Flag className="size-4" /></Button>
             <Button variant="danger" size="icon" onClick={onEnd} aria-label="End call"><PhoneOff className="size-4" /></Button>
           </>
@@ -282,6 +290,8 @@ export function ChatRoom({ roomId }: { roomId: string }) {
   const [ended, setEnded] = useState(false);
   const [endedByPartner, setEndedByPartner] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [anotherVibeStatus, setAnotherVibeStatus] = useState<AnotherVibeStatus>("idle");
+  const [anotherVibeProposalId, setAnotherVibeProposalId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const media = useWebRTC({
     enabled: Boolean(profile && liveRoom && liveRoom.mode !== "text" && !ended),
@@ -290,13 +300,18 @@ export function ChatRoom({ roomId }: { roomId: string }) {
     userId: profile?.id ?? "",
     initiator: Boolean(liveRoom?.initiator),
     onPeerEnded: () => {
+      setAnotherVibeProposalId(null);
+      setAnotherVibeStatus("idle");
       setEndedByPartner(true);
       setEnded(true);
     },
   });
+  const endMediaConnection = media.endConnection;
   const { messages, partnerTyping, sendMessage, announceTyping } = useRoomChat(roomId, !ended && liveRoom ? profile : null);
   useSessionHeartbeat(Boolean(liveRoom && !ended), () => {
     if (process.env.NODE_ENV === "development") console.info("[ROOM] Partner disconnected: heartbeat detected ended room");
+    setAnotherVibeProposalId(null);
+    setAnotherVibeStatus("idle");
     setEndedByPartner(true);
     setEnded(true);
   });
@@ -325,6 +340,63 @@ export function ChatRoom({ roomId }: { roomId: string }) {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, partnerTyping]);
 
+  useEffect(() => {
+    if (!notice || anotherVibeStatus !== "idle") return;
+    const timer = window.setTimeout(() => setNotice(null), 5200);
+    return () => window.clearTimeout(timer);
+  }, [anotherVibeStatus, notice]);
+
+  useEffect(() => {
+    if (!anotherVibeProposalId || anotherVibeStatus !== "waiting" || !liveRoom) return;
+    let active = true;
+    let timer: number | null = null;
+
+    const checkReplacement = async () => {
+      const response = await fetch(`/api/match/status?proposalId=${encodeURIComponent(anotherVibeProposalId)}`, { cache: "no-store" }).catch(() => null);
+      if (!active) return;
+      if (!response) {
+        timer = window.setTimeout(checkReplacement, 1500);
+        return;
+      }
+      if (response.status === 401) {
+        router.replace("/start");
+        return;
+      }
+      if (!response.ok) {
+        if (response.status !== 404 && response.status !== 410) {
+          timer = window.setTimeout(checkReplacement, 1500);
+          return;
+        }
+        setAnotherVibeProposalId(null);
+        setAnotherVibeStatus("idle");
+        setNotice(`No new vibe connected. You\u2019re still with ${liveRoom.partner.username}.`);
+        return;
+      }
+
+      const result = await response.json() as MatchProposalStatus;
+      if (result.status === "matched" && result.roomId) {
+        setAnotherVibeStatus("switching");
+        setNotice(`Connecting you with ${result.partner.username}...`);
+        if (liveRoom.mode !== "text") await endMediaConnection("skip");
+        router.replace(`/chat/${result.roomId}`);
+        return;
+      }
+      if (["declined", "expired", "cancelled", "invalid"].includes(result.status)) {
+        setAnotherVibeProposalId(null);
+        setAnotherVibeStatus("idle");
+        setNotice(`No new vibe connected. You\u2019re still with ${liveRoom.partner.username}.`);
+        return;
+      }
+      timer = window.setTimeout(checkReplacement, 1500);
+    };
+
+    void checkReplacement();
+    return () => {
+      active = false;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [anotherVibeProposalId, anotherVibeStatus, endMediaConnection, liveRoom, router]);
+
   async function sendDraft() {
     if (!draft.trim()) return;
     const content = draft;
@@ -333,17 +405,48 @@ export function ChatRoom({ roomId }: { roomId: string }) {
   }
 
   async function endConversation(reason: "skip" | "call-ended" = "call-ended") {
+    setAnotherVibeProposalId(null);
+    setAnotherVibeStatus("idle");
     setEndedByPartner(false);
     setEnded(true);
     if (liveRoom?.mode !== "text") await media.endConnection(reason);
     await fetch("/api/rooms/end", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ roomId, reason: reason === "skip" ? "skipped" : "ended" }) }).catch(() => undefined);
   }
 
-  async function nextConversation() {
-    setDraft("");
-    if (liveRoom?.mode !== "text") await media.endConnection("skip");
-    await fetch("/api/rooms/end", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ roomId, reason: "skipped" }) }).catch(() => undefined);
-    router.replace("/matching");
+  async function findAnotherVibe() {
+    if (!liveRoom || anotherVibeStatus !== "idle") return;
+    setAnotherVibeStatus("checking");
+    setNotice("Checking for another vibe. Your current call will stay connected.");
+
+    const response = await fetch("/api/rooms/another-vibe", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ roomId }),
+    }).catch(() => null);
+    const result = response ? await response.json().catch(() => ({})) as {
+      status?: "no_match" | "pending";
+      proposal?: { id: string; partner: { username: string } } | null;
+      error?: string;
+    } : null;
+
+    if (!response || !response.ok) {
+      if (response?.status === 401) {
+        router.replace("/start");
+        return;
+      }
+      setAnotherVibeStatus("idle");
+      setNotice(result?.error ?? `Couldn\u2019t check for a new vibe. You\u2019re still with ${liveRoom.partner.username}.`);
+      return;
+    }
+    if (result?.status === "no_match" || !result?.proposal) {
+      setAnotherVibeStatus("idle");
+      setNotice(`No one else is online right now. You\u2019re still connected to ${liveRoom.partner.username}.`);
+      return;
+    }
+
+    setAnotherVibeProposalId(result.proposal.id);
+    setAnotherVibeStatus("waiting");
+    setNotice(`${result.proposal.partner.username} is deciding. Your current call stays connected until the new vibe accepts.`);
   }
 
   async function exitGuestSession() {
@@ -408,7 +511,7 @@ export function ChatRoom({ roomId }: { roomId: string }) {
               )}
             </AnimatePresence>
           </div>
-          <Button variant="secondary" onClick={() => void nextConversation()} className="hidden sm:flex"><RotateCcw className="size-4" /> Next</Button>
+          <Button variant="secondary" disabled={anotherVibeStatus !== "idle"} onClick={() => void findAnotherVibe()} className="hidden sm:flex"><RotateCcw className={cn("size-4", anotherVibeStatus === "checking" && "animate-spin")} /> {anotherVibeLabel(anotherVibeStatus)}</Button>
           <Button variant="danger" onClick={() => void endConversation()} className="hidden sm:flex"><PhoneOff className="size-4" /> End</Button>
           <Button variant="danger" size="icon" onClick={() => void endConversation()} className="sm:hidden" aria-label="End conversation"><PhoneOff className="size-4" /></Button>
         </div>
@@ -429,7 +532,7 @@ export function ChatRoom({ roomId }: { roomId: string }) {
           ) : (
             <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto xl:flex-row xl:overflow-hidden">
               <div className="flex min-h-[520px] shrink-0 xl:min-h-0 xl:flex-1">
-                <MediaStage profile={profile} partner={liveRoom.partner} mode={liveRoom.mode} media={media} chatOpen={mediaChatOpen} onToggleChat={() => setMediaChatOpen((value) => !value)} onNext={() => void nextConversation()} onReport={() => setReportOpen(true)} onEnd={() => void endConversation()} />
+                <MediaStage profile={profile} partner={liveRoom.partner} mode={liveRoom.mode} media={media} chatOpen={mediaChatOpen} anotherVibeStatus={anotherVibeStatus} onToggleChat={() => setMediaChatOpen((value) => !value)} onAnotherVibe={() => void findAnotherVibe()} onReport={() => setReportOpen(true)} onEnd={() => void endConversation()} />
               </div>
               <aside className={cn("min-h-[320px] shrink-0 xl:flex xl:min-h-0 xl:w-[350px]", mediaChatOpen ? "flex" : "hidden")}>
                 <RoomChatPanel compact profile={profile} partner={liveRoom.partner} messages={messages} partnerTyping={partnerTyping} draft={draft} messagesEndRef={messagesEndRef} onDraftChange={setDraft} onSend={() => void sendDraft()} onTyping={announceTyping} />
@@ -464,7 +567,7 @@ export function ChatRoom({ roomId }: { roomId: string }) {
       </div>
 
       <AnimatePresence>
-        {notice && <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="glass-card fixed bottom-5 left-1/2 z-[70] -translate-x-1/2 rounded-full px-5 py-3 text-center text-xs font-bold text-white/75 shadow-2xl"><CheckCheck className="mr-2 inline size-4 text-[#78f7df]" />{notice}</motion.div>}
+        {notice && <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="glass-card fixed bottom-5 left-1/2 z-[70] w-[min(92vw,620px)] -translate-x-1/2 rounded-full px-5 py-3 text-center text-xs font-bold text-white/75 shadow-2xl"><CheckCheck className="mr-2 inline size-4 text-[#78f7df]" />{notice}</motion.div>}
       </AnimatePresence>
 
       <AnimatePresence>

@@ -32,6 +32,7 @@ export const endRoomSchema = z.object({
   roomId: z.string().uuid(),
   reason: z.enum(["ended", "skipped", "peer_left", "connection_failed"]).optional(),
 });
+export const anotherVibeSchema = z.object({ roomId: z.string().uuid() });
 export const proposalSchema = z.object({ proposalId: z.string().uuid() });
 export const heartbeatSchema = z.object({ state: z.enum(["searching", "connected"]).optional() });
 

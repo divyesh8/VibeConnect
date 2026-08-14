@@ -4,6 +4,13 @@ import type { ChatMessage } from "@/types";
 
 export type RealtimeSubscriptionStatus = "SUBSCRIBED" | "TIMED_OUT" | "CLOSED" | "CHANNEL_ERROR";
 
+export type ChatMessageHint = {
+  roomId: string;
+  messageId: string;
+  senderId: string;
+  sentAt: number;
+};
+
 export type SignalPayload =
   | { kind: "peer-ready"; mediaReady: boolean; roomId: string; senderId: string; timestamp: number; nonce: string }
   | { kind: "offer"; sdp: RTCSessionDescriptionInit; roomId: string; senderId: string; timestamp: number; nonce: string }
@@ -11,6 +18,8 @@ export type SignalPayload =
   | { kind: "ice-candidate"; candidate: RTCIceCandidateInit; roomId: string; senderId: string; timestamp: number; nonce: string }
   | { kind: "restart-request"; roomId: string; senderId: string; timestamp: number; nonce: string }
   | { kind: "skip" | "call-ended" | "peer-disconnected"; roomId: string; senderId: string; timestamp: number; nonce: string };
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function isSignalPayload(value: unknown, roomId: string): value is SignalPayload {
   if (!value || typeof value !== "object") return false;
@@ -22,10 +31,21 @@ function isSignalPayload(value: unknown, roomId: string): value is SignalPayload
     && ["peer-ready", "offer", "answer", "ice-candidate", "restart-request", "skip", "call-ended", "peer-disconnected"].includes(String(payload.kind));
 }
 
+function isChatMessageHint(value: unknown, roomId: string): value is ChatMessageHint {
+  if (!value || typeof value !== "object") return false;
+  const payload = value as Record<string, unknown>;
+  return payload.roomId === roomId
+    && typeof payload.messageId === "string" && UUID_PATTERN.test(payload.messageId)
+    && typeof payload.senderId === "string" && UUID_PATTERN.test(payload.senderId)
+    && typeof payload.sentAt === "number" && Number.isFinite(payload.sentAt)
+    && Math.abs(Date.now() - payload.sentAt) < 2 * 60_000;
+}
+
 export async function subscribeToRoom(
   roomId: string,
   handlers: {
     onMessage?: (message: ChatMessage) => void;
+    onMessageHint?: (hint: ChatMessageHint) => void;
     onTyping?: (payload: { senderId: string; typing: boolean }) => void;
     onSignal?: (signal: SignalPayload) => void;
     onStatus?: (status: RealtimeSubscriptionStatus, error?: Error) => void;
@@ -42,9 +62,9 @@ export async function subscribeToRoom(
 
   const topic = purpose === "chat" ? `room:${roomId}:chat` : `room:${roomId}`;
   console.info(`[${purpose === "chat" ? "CHAT" : "SIGNAL"}] subscribing:`, topic);
-  const channel = supabase
-    .channel(topic, { config: { private: true, broadcast: { self: false, ack: purpose === "signaling" } } })
-    .on(
+  let channel = supabase.channel(topic, { config: { private: true, broadcast: { self: false, ack: true } } });
+  if (purpose === "chat") {
+    channel = channel.on(
       "postgres_changes",
       { event: "INSERT", schema: "public", table: "messages", filter: `room_id=eq.${roomId}` },
       (payload) => {
@@ -59,11 +79,15 @@ export async function subscribeToRoom(
           seenAt: row.seen_at ? String(row.seen_at) : null,
         });
       },
-    )
-    .on("broadcast", { event: "typing" }, ({ payload }) => handlers.onTyping?.(payload as { senderId: string; typing: boolean }))
-    .on("broadcast", { event: "webrtc" }, ({ payload }) => {
+    ).on("broadcast", { event: "message-available" }, ({ payload }) => {
+      if (isChatMessageHint(payload, roomId)) handlers.onMessageHint?.(payload);
+    })
+      .on("broadcast", { event: "typing" }, ({ payload }) => handlers.onTyping?.(payload as { senderId: string; typing: boolean }));
+  } else {
+    channel = channel.on("broadcast", { event: "webrtc" }, ({ payload }) => {
       if (isSignalPayload(payload, roomId)) handlers.onSignal?.(payload);
     });
+  }
 
   try {
     await new Promise<void>((resolve, reject) => {
@@ -107,6 +131,12 @@ export async function subscribeToRoom(
 
 export async function sendTyping(channel: RealtimeChannel | null, senderId: string, typing: boolean) {
   await channel?.send({ type: "broadcast", event: "typing", payload: { senderId, typing } });
+}
+
+export async function announceMessageAvailable(channel: RealtimeChannel | null, hint: ChatMessageHint) {
+  if (!channel) return false;
+  const status = await channel.send({ type: "broadcast", event: "message-available", payload: hint });
+  return status === "ok";
 }
 
 export async function sendSignal(channel: RealtimeChannel | null, signal: SignalPayload) {

@@ -19,6 +19,7 @@ test("native Next.js build contains the public App Router routes", async () => {
   assert.ok(routes.some((route) => route.includes("/api/presence/heartbeat/route")));
   assert.ok(routes.some((route) => route.includes("/api/webrtc/ice-servers/route")));
   assert.ok(routes.some((route) => route.includes("/api/rooms/connected/route")));
+  assert.ok(routes.some((route) => route.includes("/api/rooms/another-vibe/route")));
 });
 
 async function sourceFiles(directory) {
@@ -93,13 +94,33 @@ test("voice and video calls render audible remote media without replaying on cha
   assert.match(peer, /getSenders\(\).*includes\("audio"\)/s);
 });
 
-test("Next tears down the current room before returning to matching", async () => {
+test("Another Vibe keeps the current call until a replacement has accepted", async () => {
   const room = await readFile(new URL("components/chat-room.tsx", root), "utf8");
-  const next = room.slice(room.indexOf("async function nextConversation"), room.indexOf("async function submitReport"));
-  assert.match(next, /media\.endConnection\("skip"\)/);
-  assert.match(next, /api\/rooms\/end/);
-  assert.match(next, /router\.replace\("\/matching"\)/);
-  assert.ok(next.indexOf("media.endConnection") < next.indexOf("router.replace"));
+  const finder = room.slice(room.indexOf("async function findAnotherVibe"), room.indexOf("async function exitGuestSession"));
+  assert.match(finder, /current call will stay connected/);
+  assert.doesNotMatch(finder, /media\.endConnection|api\/rooms\/end/);
+  const replacement = room.slice(room.indexOf("const checkReplacement"), room.indexOf("async function sendDraft"));
+  assert.match(replacement, /result\.status === "matched"/);
+  assert.match(replacement, /(?:media\.endConnection|endMediaConnection)\("skip"\)/);
+  assert.match(replacement, /router\.replace\(`\/chat\/\$\{result\.roomId\}`\)/);
+  const matchedBranch = replacement.slice(replacement.indexOf('result.status === "matched"'), replacement.indexOf('if (["declined"'));
+  const endIndex = Math.max(matchedBranch.indexOf("media.endConnection"), matchedBranch.indexOf("endMediaConnection"));
+  assert.ok(endIndex >= 0 && endIndex < matchedBranch.indexOf("router.replace"));
+});
+
+test("database handoff ends the old room only after the new person accepts", async () => {
+  const [schema, migration] = await Promise.all([
+    readFile(new URL("supabase/schema.sql", root), "utf8"),
+    readFile(new URL("supabase/migrations/008_another_vibe_safe_handoff.sql", root), "utf8"),
+  ]);
+  for (const sql of [schema, migration]) {
+    const handoff = sql.slice(sql.lastIndexOf("create or replace function public.accept_real_match"), sql.lastIndexOf("create or replace function public.decline_real_match"));
+    assert.match(sql, /request_another_vibe/);
+    assert.match(sql, /source_room_id/);
+    assert.match(sql, /user1_accepted[\s\S]*true/);
+    assert.match(handoff, /proposal\.user1_accepted and proposal\.user2_accepted/);
+    assert.ok(handoff.indexOf("proposal.user1_accepted and proposal.user2_accepted") < handoff.indexOf("end_reason = 'skipped'"));
+  }
 });
 
 test("signaling is room-bound and waits for both media-ready peers", async () => {
@@ -267,6 +288,27 @@ test("WebRTC media stays direct, trickles ICE, and exposes low-latency diagnosti
   assert.match(peer, /degradationPreference = "maintain-framerate"/);
   assert.match(peer, /jitterBufferDelay/);
   assert.match(peer, /currentRoundTripTime/);
-  assert.match(realtime, /broadcast: \{ self: false, ack: purpose === "signaling" \}/);
+  assert.match(realtime, /broadcast: \{ self: false, ack: true \}/);
   assert.match(realtime, /if \(status !== "ok"\)/);
+});
+
+test("video-call chat has bounded moderation and verified fast delivery", async () => {
+  const [hook, route, realtime, moderation] = await Promise.all([
+    readFile(new URL("hooks/use-room-chat.ts", root), "utf8"),
+    readFile(new URL("app/api/messages/route.ts", root), "utf8"),
+    readFile(new URL("services/realtime.ts", root), "utf8"),
+    readFile(new URL("services/moderation.ts", root), "utf8"),
+  ]);
+  assert.match(moderation, /MODERATION_TIMEOUT_MS = 1_500/);
+  assert.match(moderation, /signal: controller\.signal/);
+  assert.match(moderation, /if \(localDecision\.flagged\) return localDecision/);
+  assert.match(route, /messageId = request\.nextUrl\.searchParams\.get\("messageId"\)/);
+  assert.match(route, /query = query\.eq\("id", messageId\)/);
+  assert.match(realtime, /event: "message-available"/);
+  const hintType = realtime.slice(realtime.indexOf("export type ChatMessageHint"), realtime.indexOf("export type SignalPayload"));
+  assert.doesNotMatch(hintType, /content/);
+  assert.match(hook, /announceMessageAvailable/);
+  assert.match(hook, /messageId=\$\{encodeURIComponent\(hint\.messageId\)\}/);
+  assert.match(hook, /verified\.senderId !== hint\.senderId/);
+  assert.match(hook, /Postgres delivery remains active/);
 });

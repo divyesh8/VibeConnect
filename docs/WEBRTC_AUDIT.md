@@ -99,3 +99,29 @@ No before/after network numbers are claimed from this code-only environment: it 
 | Forced TURN / development only | pending device test | pending | pending | pending | pending | pending | pending |
 
 If first packet, decode, and display timestamps are close but RTT or jitter-buffer delay is large, the remaining cause is the selected network/TURN path. If peer connection is fast but the first packet is late, inspect sender encoding and outbound bandwidth. If packets arrive immediately but decode/display is late, inspect receiver CPU and codec behavior with `chrome://webrtc-internals`.
+
+## In-call text latency pass (2026-08-15)
+
+The previous text path was:
+
+```text
+send -> unbounded external moderation -> database insert
+     -> Postgres replication -> remote browser
+```
+
+The external moderation fetch had no timeout, so a slow provider request blocked insertion for 15–20 seconds. After insertion, delivery still depended entirely on Postgres Changes replication.
+
+The repaired path is:
+
+```text
+send -> immediate local high-risk guard
+     -> provider moderation (1.5 second maximum, then local fallback)
+     -> database insert
+     -> private Broadcast containing only the persisted message ID
+     -> receiver fetches that ID through the authorized API
+     -> render
+
+Postgres Changes remains an automatic deduplicated fallback.
+```
+
+The fast notification never contains message text. A client cannot use it to bypass moderation: the receiver displays only the row returned by the room-membership-authorized API after persistence. Development logs report API persistence time, notification success, verification time, approximate end-to-end time, and Postgres fallback latency without saving metrics.
