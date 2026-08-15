@@ -36,9 +36,9 @@ The default scripts use native Next.js 15, so Vercel can detect and deploy the A
 
 Add the variables from [`.env.example`](.env.example), then redeploy. If the Vercel project previously had an overridden build or output directory, remove those overrides before redeploying.
 
-Production video requires a TURN relay for mobile carrier networks and restrictive NATs. The recommended setup uses `CLOUDFLARE_TURN_KEY_ID` and `CLOUDFLARE_TURN_API_TOKEN`; the room-authorized API exchanges them for short-lived browser credentials.
+Production video requires a TURN relay for mobile carrier networks and restrictive NATs. For a zero-money deployment, use Metered Open Relay's no-card free tier and configure `METERED_TURN_APP_NAME` plus `METERED_TURN_API_KEY`. The room-authorized API obtains short-lived browser credentials without exposing the API key. Cloudflare and generic/static TURN configurations remain optional alternatives.
 
-For the included OpenAI Sites project, add those two values as production secrets in the Site environment before publishing. A successful code deployment without TURN secrets still supports direct ICE where possible, but it cannot guarantee audio/video between carrier networks and restrictive Wi-Fi.
+For Vercel or the included OpenAI Sites project, add the two Metered values as production secrets before publishing. A successful code deployment without TURN secrets still supports direct ICE where possible, but it cannot guarantee audio/video between carrier networks and restrictive Wi-Fi.
 
 ## Production data setup
 

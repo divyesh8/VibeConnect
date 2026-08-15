@@ -145,8 +145,12 @@ test("signaling is room-bound and waits for both media-ready peers", async () =>
   assert.match(hook, /refreshPeerIceConfiguration/);
   assert.match(hook, /fetchIceConfiguration\(roomId\)/);
   assert.doesNotMatch(env, /NEXT_PUBLIC_TURN_(?:URL|USERNAME|CREDENTIAL)=/);
+  assert.match(env, /METERED_TURN_APP_NAME=/);
+  assert.match(env, /METERED_TURN_API_KEY=/);
   assert.match(env, /CLOUDFLARE_TURN_KEY_ID=/);
   assert.match(env, /CLOUDFLARE_TURN_API_TOKEN=/);
+  assert.match(iceRoute, /metered\.live\/api\/v1\/turn\/credentials/);
+  assert.match(iceRoute, /endpoint\.searchParams\.set\("apiKey", apiKey\)/);
   assert.match(iceRoute, /credentials\/generate-ice-servers/);
   assert.match(iceRoute, /AbortSignal\.timeout\(TURN_FETCH_TIMEOUT_MS\)/);
   assert.match(iceRoute, /containsTurnServer\(payload\.iceServers\)/);

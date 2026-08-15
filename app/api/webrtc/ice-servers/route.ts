@@ -4,7 +4,7 @@ import { getSessionUser } from "@/lib/server/session";
 import { createServerSupabase } from "@/services/supabase";
 
 type IceServerPayload = { iceServers: RTCIceServer[] };
-type TurnProvider = "cloudflare" | "managed" | "static" | "none";
+type TurnProvider = "metered" | "cloudflare" | "managed" | "static" | "none";
 
 const TURN_FETCH_TIMEOUT_MS = 6_000;
 
@@ -86,6 +86,35 @@ async function cloudflareTurnServers(): Promise<RTCIceServer[] | null> {
   return servers;
 }
 
+async function meteredTurnServers(): Promise<RTCIceServer[] | null> {
+  const appName = process.env.METERED_TURN_APP_NAME?.trim();
+  const apiKey = process.env.METERED_TURN_API_KEY?.trim();
+  if (!appName && !apiKey) return null;
+  if (!appName || !apiKey) throw new Error("Metered Open Relay requires both an app name and API key");
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(appName)) {
+    throw new Error("Metered Open Relay app name is invalid");
+  }
+
+  const endpoint = new URL(`https://${appName}.metered.live/api/v1/turn/credentials`);
+  endpoint.searchParams.set("apiKey", apiKey);
+  const response = await fetch(endpoint, {
+    method: "GET",
+    cache: "no-store",
+    signal: AbortSignal.timeout(TURN_FETCH_TIMEOUT_MS),
+  });
+  if (!response.ok) throw new Error(`Metered Open Relay returned ${response.status}`);
+  const payload = await response.json() as unknown;
+  const iceServers = Array.isArray(payload)
+    ? payload
+    : (payload && typeof payload === "object" ? (payload as Partial<IceServerPayload>).iceServers : undefined);
+  if (!validIceServers(iceServers) || !containsTurnServer(iceServers)) {
+    throw new Error("Metered Open Relay returned no authenticated relay server");
+  }
+  const servers = withoutBrowserBlockedPort53(iceServers);
+  if (!containsTurnServer(servers)) throw new Error("Metered Open Relay returned no browser-usable relay server");
+  return servers;
+}
+
 async function genericManagedTurnServers(userId: string, roomId: string): Promise<RTCIceServer[] | null> {
   const endpoint = process.env.TURN_CREDENTIALS_URL;
   if (!endpoint) return null;
@@ -112,6 +141,7 @@ async function genericManagedTurnServers(userId: string, roomId: string): Promis
 async function configuredTurnServers(userId: string, roomId: string): Promise<{ servers: RTCIceServer[]; provider: TurnProvider }> {
   const failures: unknown[] = [];
   const providers: Array<{ name: Exclude<TurnProvider, "static" | "none">; load: () => Promise<RTCIceServer[] | null> }> = [
+    { name: "metered", load: () => meteredTurnServers() },
     { name: "cloudflare", load: () => cloudflareTurnServers() },
     { name: "managed", load: () => genericManagedTurnServers(userId, roomId) },
   ];
