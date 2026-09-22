@@ -405,7 +405,13 @@ export function ChatRoom({ roomId }: { roomId: string }) {
         if (!response.ok || !["connecting", "active"].includes(data.status) || !data.partner) throw new Error(data.error ?? "This room is no longer active.");
         if (active) setLiveRoom(data);
       } catch (error) {
-        if (active) setRoomError(error instanceof Error ? error.message : "This live room could not be verified.");
+        if (active) {
+          console.error(`[VC][room=${roomId}][ROOM_VERIFICATION_FAILURE]:`, error);
+          const message = error instanceof TypeError && error.message.includes("fetch")
+            ? "Unable to reach the live room server. Please check your network connection."
+            : (error instanceof Error ? error.message : "This live room could not be verified.");
+          setRoomError(message);
+        }
       }
     })();
     return () => { active = false; };

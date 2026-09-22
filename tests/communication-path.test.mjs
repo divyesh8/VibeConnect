@@ -88,7 +88,7 @@ class MockRTCPeerConnection {
     return this.senders;
   }
 
-  addTrack(track, stream) {
+  addTrack(track) {
     const sender = new MockRTCRtpSender(track);
     this.senders.push(sender);
     return sender;
@@ -316,8 +316,6 @@ test("WebRTC: duplicate ICE candidate is deduplicated by candidateKey", async ()
 });
 
 test("WebRTC: stale signaling message older than 2 minutes is rejected", () => {
-  const roomId = "room-abc";
-  const userId = "user-123";
   const now = Date.now();
 
   const isStale = (timestamp) => Math.abs(now - timestamp) > 2 * 60_000;

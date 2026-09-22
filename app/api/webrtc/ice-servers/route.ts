@@ -166,28 +166,44 @@ async function configuredTurnServers(userId: string, roomId: string): Promise<{ 
 }
 
 export async function GET(request: NextRequest) {
-  const user = await getSessionUser(request);
-  if (!user) return NextResponse.json({ error: "Session expired." }, { status: 401 });
-  const roomId = request.nextUrl.searchParams.get("roomId");
-  if (!roomId || !/^[0-9a-f-]{36}$/i.test(roomId)) return NextResponse.json({ error: "Invalid room." }, { status: 400 });
-  const supabase = createServerSupabase();
-  if (!supabase) return NextResponse.json({ error: "WebRTC network configuration is unavailable." }, { status: 503 });
-  if (!await allowDistributedRequest(supabase, `ice-config:${user.id}`, 12, 60)) {
-    return NextResponse.json({ error: "Please wait before requesting call configuration again." }, { status: 429 });
-  }
-  const { data: membership } = await supabase
-    .from("room_members")
-    .select("room_id")
-    .eq("room_id", roomId)
-    .eq("user_id", user.id)
-    .eq("active", true)
-    .maybeSingle();
-  if (!membership) return NextResponse.json({ error: "Not an active room member." }, { status: 403 });
-
   try {
-    const turn = await configuredTurnServers(String(user.id), roomId);
+    const user = await getSessionUser(request);
+    if (!user) return NextResponse.json({ error: "Session expired." }, { status: 401 });
+    const roomId = request.nextUrl.searchParams.get("roomId");
+    if (!roomId || !/^[0-9a-f-]{36}$/i.test(roomId)) return NextResponse.json({ error: "Invalid room." }, { status: 400 });
+    const supabase = createServerSupabase();
+    if (!supabase) return NextResponse.json({ error: "WebRTC network configuration is unavailable." }, { status: 503 });
+    if (!await allowDistributedRequest(supabase, `ice-config:${user.id}`, 12, 60)) {
+      return NextResponse.json({ error: "Please wait before requesting call configuration again." }, { status: 429 });
+    }
+    const { data: membership } = await supabase
+      .from("room_members")
+      .select("room_id")
+      .eq("room_id", roomId)
+      .eq("user_id", user.id)
+      .eq("active", true)
+      .maybeSingle();
+    if (!membership) return NextResponse.json({ error: "Not an active room member." }, { status: 403 });
+
+    const stunServers = configuredStunServers();
+    let turn: { servers: RTCIceServer[]; provider: TurnProvider } = { servers: [], provider: "none" };
+    try {
+      turn = await configuredTurnServers(String(user.id), roomId);
+    } catch (error) {
+      console.warn("[WEBRTC] TURN credentials unavailable, falling back to STUN-only configuration", error);
+    }
+
     const turnConfigured = containsTurnServer(turn.servers);
-    const iceServers = [...configuredStunServers(), ...turn.servers];
+    const iceServers = [...stunServers, ...turn.servers];
+
+    if (process.env.NODE_ENV !== "production" && process.env.WEBRTC_FORCE_RELAY === "true" && !turnConfigured) {
+      return NextResponse.json({ error: "TURN credentials are temporarily unavailable." }, { status: 503 });
+    }
+
+    if (!iceServers.length) {
+      return NextResponse.json({ error: "WebRTC network configuration is unavailable." }, { status: 503 });
+    }
+
     return NextResponse.json({
       iceServers,
       forceRelay: process.env.NODE_ENV !== "production" && process.env.WEBRTC_FORCE_RELAY === "true",
@@ -195,7 +211,7 @@ export async function GET(request: NextRequest) {
       turnProvider: turn.provider,
     }, { headers: { "cache-control": "private, no-store" } });
   } catch (error) {
-    console.error("[WEBRTC] TURN credentials unavailable", error);
-    return NextResponse.json({ error: "TURN credentials are temporarily unavailable." }, { status: 503 });
+    console.error("[WEBRTC] Unexpected error in ice-servers endpoint", error);
+    return NextResponse.json({ error: "WebRTC network configuration is unavailable." }, { status: 500 });
   }
 }

@@ -120,25 +120,31 @@ export function MatchingExperience() {
 
   async function acceptProposal() {
     if (!proposalId) return;
-    const response = await fetch("/api/match/accept", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ proposalId }),
-    });
-    const result = await response.json() as { status?: string; roomId?: string | null; error?: string };
-    if (!response.ok) {
-      setError(result.error ?? "This connection could not be confirmed.");
+    try {
+      const response = await fetch("/api/match/accept", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ proposalId }),
+      });
+      const result = await response.json() as { status?: string; roomId?: string | null; error?: string };
+      if (!response.ok) {
+        setError(result.error ?? "This connection could not be confirmed.");
+        setPhase("error");
+        return;
+      }
+      if (result.status === "matched" && result.roomId) {
+        setPhase("connecting");
+        presence.handoffToRoom();
+        router.push(`/chat/${result.roomId}`);
+        return;
+      }
+      if (result.status === "pending") setPhase("accepted");
+      else resetToQueue();
+    } catch (acceptError) {
+      console.error("[MATCH] accept failed:", acceptError);
+      setError("Unable to confirm the connection. Please check your network and try again.");
       setPhase("error");
-      return;
     }
-    if (result.status === "matched" && result.roomId) {
-      setPhase("connecting");
-      presence.handoffToRoom();
-      router.push(`/chat/${result.roomId}`);
-      return;
-    }
-    if (result.status === "pending") setPhase("accepted");
-    else resetToQueue();
   }
 
   async function declineProposal() {

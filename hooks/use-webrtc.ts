@@ -81,9 +81,16 @@ async function requestLocalMedia(mode: CommunicationMode) {
 }
 
 async function fetchIceConfiguration(roomId: string): Promise<IceConfiguration> {
-  const response = await fetch(`/api/webrtc/ice-servers?roomId=${encodeURIComponent(roomId)}`, { cache: "no-store" });
+  let response: Response;
+  try {
+    response = await fetch(`/api/webrtc/ice-servers?roomId=${encodeURIComponent(roomId)}`, { cache: "no-store" });
+  } catch (networkError) {
+    console.error(`[VC][room=${roomId}][CONNECTION] ICE_CONFIGURATION_FAILURE: network fetch failed`, networkError);
+    throw new Error("Unable to reach WebRTC configuration server. Please check your internet connection.");
+  }
   const data = await response.json().catch(() => ({})) as IceServerResponse;
   if (!response.ok || !data.iceServers?.length) {
+    console.error(`[VC][room=${roomId}][CONNECTION] ICE_CONFIGURATION_FAILURE: HTTP ${response.status}`, data);
     throw new Error(data.error ?? "WebRTC network configuration is unavailable.");
   }
   return {
@@ -596,16 +603,35 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
       }
 
       // Local preview is live at this point. Signaling and ICE setup are intentionally independent.
+      let signalingChannel: RealtimeChannel | null = null;
       try {
-        const [signalingChannel, iceData] = await Promise.all([
-          signalingPromiseRef.current,
-          fetchIceConfiguration(roomId),
-        ]);
-        if (lifecycle !== lifecycleRef.current) return;
-        if (!signalingChannel && !channelRef.current) throw new Error("The private signaling channel is not ready yet. Try again in a moment.");
+        signalingChannel = await signalingPromiseRef.current;
+        if (!signalingChannel && !channelRef.current) {
+          throw new Error("The private signaling channel is not ready yet. Try again in a moment.");
+        }
         if (!channelRef.current && signalingChannel) {
           channelRef.current = signalingChannel;
         }
+      } catch (sigError) {
+        if (lifecycle !== lifecycleRef.current) return;
+        console.error(`[VC][room=${roomId}][user=${userId}][CONNECTION] REALTIME_SUBSCRIPTION_FAILURE:`, sigError);
+        setError("The private signaling channel could not be opened. Please retry the call.");
+        setPhase("failed");
+        return;
+      }
+
+      let iceData: IceConfiguration;
+      try {
+        iceData = await fetchIceConfiguration(roomId);
+      } catch (iceError) {
+        if (lifecycle !== lifecycleRef.current) return;
+        console.error(`[VC][room=${roomId}][user=${userId}][CONNECTION] ICE_CONFIGURATION_FAILURE:`, iceError);
+        setError(iceError instanceof Error ? iceError.message : "WebRTC network configuration is unavailable. Please try again.");
+        setPhase("failed");
+        return;
+      }
+
+      try {
         turnConfiguredRef.current = iceData.turnConfigured;
         setTurnConfigured(turnConfiguredRef.current);
 
@@ -649,14 +675,14 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
         await maybeCreateOffer();
       } catch (connectionError) {
         if (lifecycle !== lifecycleRef.current) return;
-        console.error("[WEBRTC] setup failed after local media became ready", connectionError);
+        console.error(`[VC][room=${roomId}][user=${userId}][CONNECTION] WEBRTC_CONNECTION_FAILURE:`, connectionError);
         setError(connectionError instanceof Error ? connectionError.message : "The secure call setup failed.");
         setPhase("failed");
       }
     } finally {
       if (mediaStartTokenRef.current === mediaStartToken) mediaStartTokenRef.current = null;
     }
-  }, [createPeer, enabled, initiator, log, markTimeline, maybeCreateOffer, mode, refreshDiagnostics, roomId, send, startConnectionTimeout]);
+  }, [createPeer, enabled, initiator, log, markTimeline, maybeCreateOffer, mode, refreshDiagnostics, roomId, send, startConnectionTimeout, userId]);
 
   const toggleMic = useCallback(() => {
     setMicEnabled((currentlyEnabled) => {
