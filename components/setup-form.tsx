@@ -49,6 +49,12 @@ export function SetupForm() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!profile) {
+      void ensureAnonymousAuth().catch(() => undefined);
+    }
+  }, [profile]);
+
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
     setError("");

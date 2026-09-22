@@ -22,9 +22,9 @@ export async function POST(request: NextRequest) {
   }
 
   const accessToken = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
-  if (!accessToken) return NextResponse.json({ error: "Anonymous identity is required." }, { status: 401 });
+  if (!accessToken) return NextResponse.json({ error: "Connection service is temporarily unavailable. Please try again." }, { status: 401 });
   const { data: authData, error: authError } = await supabase.auth.getUser(accessToken);
-  if (authError || !authData.user?.is_anonymous) return NextResponse.json({ error: "Invalid anonymous identity." }, { status: 401 });
+  if (authError || !authData.user?.is_anonymous) return NextResponse.json({ error: "Connection service configuration is incomplete." }, { status: 401 });
   const userId = authData.user.id;
   const sessionId = crypto.randomUUID();
   const sessionToken = `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll("-", "");

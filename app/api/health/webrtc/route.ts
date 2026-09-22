@@ -31,12 +31,17 @@ export async function GET(request: NextRequest) {
   const user = await getSessionUser(request);
   const stunConfigured = hasStunServers();
   const turnInfo = detectTurnProvider();
+  const clientSupabaseConfigured = Boolean(
+    process.env.NEXT_PUBLIC_SUPABASE_URL &&
+    (process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)
+  );
 
-  const ok = Boolean(supabase && stunConfigured);
+  const ok = Boolean(supabase && stunConfigured && clientSupabaseConfigured);
 
   return NextResponse.json({
     ok,
     supabaseConfigured: Boolean(supabase),
+    clientSupabaseConfigured,
     sessionAvailable: Boolean(user),
     stunConfigured,
     turnConfigured: turnInfo.configured,
@@ -45,3 +50,4 @@ export async function GET(request: NextRequest) {
     headers: { "cache-control": "no-store" },
   });
 }
+
