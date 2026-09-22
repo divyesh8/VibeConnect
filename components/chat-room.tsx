@@ -30,7 +30,7 @@ import { useGuestProfile } from "@/components/guest-profile-provider";
 import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { GlassCard } from "@/components/ui/glass-card";
-import { useRoomChat } from "@/hooks/use-room-chat";
+import { useRoomChat, type ChatDiagnostics } from "@/hooks/use-room-chat";
 import { useSessionHeartbeat } from "@/hooks/use-session-heartbeat";
 import { useWebRTC } from "@/hooks/use-webrtc";
 import { cn, initials } from "@/lib/utils";
@@ -62,10 +62,15 @@ function StreamVideo({ stream, muted = false, className, onPlaybackBlocked, onFi
     if (!element) return;
     let frameCallbackId: number | null = null;
     let firstFrameReported = false;
-    const reportFirstFrame = () => {
-      if (firstFrameReported || element.videoWidth <= 0 || element.videoHeight <= 0) return;
-      firstFrameReported = true;
-      firstFrameRef.current?.();
+    let cancelled = false;
+    const checkFrame = () => {
+      if (cancelled || firstFrameReported) return;
+      if (element.videoWidth > 0 && element.videoHeight > 0) {
+        firstFrameReported = true;
+        firstFrameRef.current?.();
+      } else if (typeof element.requestVideoFrameCallback === "function") {
+        frameCallbackId = element.requestVideoFrameCallback(checkFrame);
+      }
     };
     element.srcObject = stream;
     element.muted = muted;
@@ -73,11 +78,11 @@ function StreamVideo({ stream, muted = false, className, onPlaybackBlocked, onFi
     element.volume = muted ? 0 : 1;
     if (stream && firstFrameRef.current) {
       if (typeof element.requestVideoFrameCallback === "function") {
-        frameCallbackId = element.requestVideoFrameCallback(() => reportFirstFrame());
+        frameCallbackId = element.requestVideoFrameCallback(checkFrame);
       } else {
-        element.addEventListener("loadeddata", reportFirstFrame);
-        element.addEventListener("playing", reportFirstFrame);
-        element.addEventListener("resize", reportFirstFrame);
+        element.addEventListener("loadeddata", checkFrame);
+        element.addEventListener("playing", checkFrame);
+        element.addEventListener("resize", checkFrame);
       }
     }
     if (stream) void element.play().catch((error) => {
@@ -85,10 +90,11 @@ function StreamVideo({ stream, muted = false, className, onPlaybackBlocked, onFi
       playbackBlockedRef.current?.();
     });
     return () => {
+      cancelled = true;
       if (frameCallbackId !== null && typeof element.cancelVideoFrameCallback === "function") element.cancelVideoFrameCallback(frameCallbackId);
-      element.removeEventListener("loadeddata", reportFirstFrame);
-      element.removeEventListener("playing", reportFirstFrame);
-      element.removeEventListener("resize", reportFirstFrame);
+      element.removeEventListener("loadeddata", checkFrame);
+      element.removeEventListener("playing", checkFrame);
+      element.removeEventListener("resize", checkFrame);
       if (element.srcObject === stream) element.srcObject = null;
     };
   }, [muted, ref, stream]);
@@ -116,7 +122,7 @@ function videoFormat(width: number | null | undefined, height: number | null | u
   return `${width}×${height} @ ${fps === null || fps === undefined ? "—" : Math.round(fps)}fps`;
 }
 
-function MediaStage({ profile, partner, mode, media, chatOpen, anotherVibeStatus, onToggleChat, onAnotherVibe, onReport, onEnd }: { profile: AnonymousProfile; partner: LiveRoomContext["partner"]; mode: CommunicationMode; media: MediaController; chatOpen: boolean; anotherVibeStatus: AnotherVibeStatus; onToggleChat: () => void; onAnotherVibe: () => void; onReport: () => void; onEnd: () => void }) {
+function MediaStage({ profile, partner, mode, media, chatDiagnostics, chatOpen, anotherVibeStatus, onToggleChat, onAnotherVibe, onReport, onEnd }: { profile: AnonymousProfile; partner: LiveRoomContext["partner"]; mode: CommunicationMode; media: MediaController; chatDiagnostics?: ChatDiagnostics; chatOpen: boolean; anotherVibeStatus: AnotherVibeStatus; onToggleChat: () => void; onAnotherVibe: () => void; onReport: () => void; onEnd: () => void }) {
   const [playbackBlocked, setPlaybackBlocked] = useState(false);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const connected = media.phase === "connected";
@@ -203,22 +209,76 @@ function MediaStage({ profile, partner, mode, media, chatOpen, anotherVibeStatus
         {media.localStream && <p className="w-full text-center text-[9px] font-semibold text-white/30">Microphone {media.micEnabled ? "on" : "muted"} · Partner audio {connected ? "connected" : remoteAudioNegotiated ? "negotiated, waiting for network" : "waiting"}</p>}
         {media.turnConfigured === false && !connected && <p className="w-full text-center text-[10px] font-bold text-amber-200">TURN relay is not configured. Mobile and restrictive networks may not connect.</p>}
         {media.error && <div className="flex w-full flex-wrap items-center justify-center gap-2"><p className="text-center text-[10px] font-bold text-rose-300">{media.error}</p>{media.localStream && <Button variant="secondary" size="sm" onClick={media.retryConnection}>Retry</Button>}</div>}
-        {playbackBlocked && <button onClick={() => void enablePartnerAudio()} className="w-full text-center text-xs font-bold text-amber-200">Enable partner audio</button>}
+        {playbackBlocked && (
+          <div className="flex w-full items-center justify-center p-1">
+            <button
+              onClick={() => void enablePartnerAudio()}
+              className="flex items-center gap-2 rounded-full border border-amber-400/30 bg-amber-400/10 px-4 py-2 text-xs font-bold text-amber-200 transition hover:bg-amber-400/20"
+            >
+              <Volume2 className="size-4 animate-bounce" />
+              Audio blocked by browser. Tap here to unmute partner.
+            </button>
+          </div>
+        )}
       </div>
       {diagnosticsVisible && (
         <details className="border-t border-white/[0.07] bg-black/35 px-4 py-2 text-[9px] text-white/45">
-          <summary className="cursor-pointer font-bold text-white/55">WebRTC performance · {media.diagnostics?.route ?? "not-started"}</summary>
-          <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-4">
-            <span>Permission: {media.mediaPermission}</span><span>Secure: {media.secureContext ? "yes" : "no"}</span><span>Media: {media.mediaStatus}</span><span>Realtime: {media.realtimeStatus}</span>
-            <span className="truncate" title={media.roomId}>Room: {media.roomId}</span><span>Role: {media.role}</span><span>Peer ready: {media.signalDiagnostics.peerReady}</span><span>Signal: {media.diagnostics?.signalingState ?? "unavailable"}</span>
-            <span>Offer: {media.signalDiagnostics.offer}</span><span>Answer: {media.signalDiagnostics.answer}</span><span>Local ICE: {media.signalDiagnostics.localIce}</span><span>Remote ICE: {media.signalDiagnostics.remoteIce}</span>
-            <span>ICE: {media.diagnostics?.iceConnectionState ?? "unavailable"}</span><span>Peer: {media.diagnostics?.connectionState ?? "unavailable"}</span><span>Local A/V: {media.diagnostics?.localAudio ?? "missing"}/{media.diagnostics?.localVideo ?? "missing"}</span><span>Remote A/V: {media.diagnostics?.remoteAudio ?? "missing"}/{media.diagnostics?.remoteVideo ?? "missing"}</span>
-            <span>Route: {media.diagnostics?.route ?? "unknown"}</span><span>Candidates: {media.diagnostics?.localCandidateType ?? "unknown"} → {media.diagnostics?.remoteCandidateType ?? "unknown"}</span><span>Transport: {media.diagnostics?.relayProtocol ?? media.diagnostics?.protocol ?? "—"}</span><span>Codec: {media.diagnostics?.codec ?? "—"}</span>
-            <span>RTT: {metric(media.diagnostics?.rttMs, "ms")}</span><span>Incoming jitter: {metric(media.diagnostics?.jitterMs, "ms")}</span><span>Jitter buffer: {metric(media.diagnostics?.jitterBufferMs, "ms")}</span><span>Packet loss: {metric(media.diagnostics?.packetLossPercent, "%")}</span>
-            <span>Outgoing: {metric(media.diagnostics?.outgoingBitrateKbps, " kbps")}</span><span>Incoming: {metric(media.diagnostics?.incomingBitrateKbps, " kbps")}</span><span>Available out: {metric(media.diagnostics?.availableOutgoingBitrateKbps, " kbps")}</span><span>Lost: {media.diagnostics?.packetsLost ?? 0} pkts</span>
-            <span>Video send: {videoFormat(media.diagnostics?.videoOutbound.frameWidth, media.diagnostics?.videoOutbound.frameHeight, media.diagnostics?.videoOutbound.framesPerSecond)}</span><span>Video receive: {videoFormat(media.diagnostics?.videoInbound.frameWidth, media.diagnostics?.videoInbound.frameHeight, media.diagnostics?.videoInbound.framesPerSecond)}</span><span>Dropped frames: {media.diagnostics?.videoInbound.framesDropped ?? 0}</span><span>Quality limit: {media.diagnostics?.videoOutbound.qualityLimitationReason ?? "—"}</span>
-            <span>First frame after peer: {metric(firstFrameAfterConnected, "ms")}</span><span>Match → media: {metric(media.timeline.localMediaReady, "ms")}</span><span>Match → ICE: {metric(media.timeline.iceConnected, "ms")}</span><span>Match → peer: {metric(media.timeline.peerConnected, "ms")}</span>
-            <span>Offer sent/received: {metric(media.timeline.offerSent, "ms")} / {metric(media.timeline.offerReceived, "ms")}</span><span>Answer sent/received: {metric(media.timeline.answerSent, "ms")} / {metric(media.timeline.answerReceived, "ms")}</span><span>First packet/decode: {metric(media.timeline.firstInboundVideoPacket, "ms")} / {metric(media.timeline.firstDecodedVideoFrame, "ms")}</span><span>Match → displayed: {metric(media.timeline.firstRemoteVideoFrame, "ms")}</span>
+          <summary className="cursor-pointer font-bold text-white/55">
+            Communication Health · {media.diagnostics?.route ?? "not-started"} · Realtime: {media.realtimeStatus} · Chat: {chatDiagnostics?.channelStatus ?? "—"}
+          </summary>
+          <div className="mt-2 space-y-2">
+            <div>
+              <span className="font-bold text-[#78f7df]">SIGNALING:</span>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 sm:grid-cols-4">
+                <span>Realtime: {media.realtimeStatus}</span>
+                <span>Peer ready: {media.signalDiagnostics.peerReady}</span>
+                <span>Offer: {media.signalDiagnostics.offer}</span>
+                <span>Answer: {media.signalDiagnostics.answer}</span>
+                <span>Local ICE: {media.signalDiagnostics.localIce}</span>
+                <span>Remote ICE: {media.signalDiagnostics.remoteIce}</span>
+                <span>Room: {media.roomId}</span>
+                <span>Role: {media.role}</span>
+              </div>
+            </div>
+            <div>
+              <span className="font-bold text-[#9d78ff]">WEBRTC:</span>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 sm:grid-cols-4">
+                <span>Signaling state: {media.diagnostics?.signalingState ?? "unavailable"}</span>
+                <span>ICE state: {media.diagnostics?.iceConnectionState ?? "unavailable"}</span>
+                <span>Connection state: {media.diagnostics?.connectionState ?? "unavailable"}</span>
+                <span>Route: {media.diagnostics?.route ?? "unknown"}</span>
+                <span>Candidate types: {media.diagnostics?.localCandidateType ?? "unknown"} → {media.diagnostics?.remoteCandidateType ?? "unknown"}</span>
+                <span>Transport: {media.diagnostics?.relayProtocol ?? media.diagnostics?.protocol ?? "—"}</span>
+                <span>Codec: {media.diagnostics?.codec ?? "—"}</span>
+                <span>RTT: {metric(media.diagnostics?.rttMs, "ms")}</span>
+              </div>
+            </div>
+            <div>
+              <span className="font-bold text-[#ff86c5]">MEDIA:</span>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 sm:grid-cols-4">
+                <span>Local audio/video: {media.diagnostics?.localAudio ?? "missing"}/{media.diagnostics?.localVideo ?? "missing"}</span>
+                <span>Remote audio/video: {media.diagnostics?.remoteAudio ?? "missing"}/{media.diagnostics?.remoteVideo ?? "missing"}</span>
+                <span>Video send: {videoFormat(media.diagnostics?.videoOutbound.frameWidth, media.diagnostics?.videoOutbound.frameHeight, media.diagnostics?.videoOutbound.framesPerSecond)}</span>
+                <span>Video receive: {videoFormat(media.diagnostics?.videoInbound.frameWidth, media.diagnostics?.videoInbound.frameHeight, media.diagnostics?.videoInbound.framesPerSecond)}</span>
+                <span>Dropped frames: {media.diagnostics?.videoInbound.framesDropped ?? 0}</span>
+                <span>In/Out bitrate: {metric(media.diagnostics?.incomingBitrateKbps, " kbps")} / {metric(media.diagnostics?.outgoingBitrateKbps, " kbps")}</span>
+                <span>Packet loss: {metric(media.diagnostics?.packetLossPercent, "%")}</span>
+                <span>First frame after peer: {metric(firstFrameAfterConnected, "ms")}</span>
+              </div>
+            </div>
+            {chatDiagnostics && (
+              <div>
+                <span className="font-bold text-amber-300">CHAT:</span>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 sm:grid-cols-4">
+                  <span>Channel status: {chatDiagnostics.channelStatus}</span>
+                  <span>Last POST: {chatDiagnostics.lastPostStatus}</span>
+                  <span>Last Broadcast: {chatDiagnostics.lastBroadcastStatus}</span>
+                  <span>Last verification: {chatDiagnostics.lastVerificationStatus}</span>
+                  <span>Postgres fallback used: {chatDiagnostics.postgresFallbackUsed ? "yes" : "no"}</span>
+                  <span>Message count: {chatDiagnostics.messageCount}</span>
+                </div>
+              </div>
+            )}
           </div>
         </details>
       )}
@@ -309,7 +369,7 @@ export function ChatRoom({ roomId }: { roomId: string }) {
   });
   const endMediaConnection = media.endConnection;
   const startMediaConnection = media.startMedia;
-  const { messages, partnerTyping, sendMessage, announceTyping } = useRoomChat(roomId, !ended && liveRoom ? profile : null);
+  const { messages, partnerTyping, sendMessage, announceTyping, chatDiagnostics } = useRoomChat(roomId, !ended && liveRoom ? profile : null);
   useSessionHeartbeat(Boolean(liveRoom && !ended), () => {
     if (process.env.NODE_ENV === "development") console.info("[ROOM] Partner disconnected: heartbeat detected ended room");
     setAnotherVibeProposalId(null);
@@ -317,6 +377,19 @@ export function ChatRoom({ roomId }: { roomId: string }) {
     setEndedByPartner(true);
     setEnded(true);
   });
+
+  useEffect(() => {
+    queueMicrotask(() => {
+      setEnded(false);
+      setEndedByPartner(false);
+      setRoomError(null);
+      setLiveRoom(null);
+      setNotice(null);
+      setAnotherVibeStatus("idle");
+      setAnotherVibeProposalId(null);
+      setMediaChatOpen(false);
+    });
+  }, [roomId]);
 
   useEffect(() => {
     if (!isLoaded) return;
@@ -543,7 +616,7 @@ export function ChatRoom({ roomId }: { roomId: string }) {
           ) : (
             <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto xl:flex-row xl:overflow-hidden">
               <div className="flex min-h-[520px] shrink-0 xl:min-h-0 xl:flex-1">
-                <MediaStage profile={profile} partner={liveRoom.partner} mode={liveRoom.mode} media={media} chatOpen={mediaChatOpen} anotherVibeStatus={anotherVibeStatus} onToggleChat={() => setMediaChatOpen((value) => !value)} onAnotherVibe={() => void findAnotherVibe()} onReport={() => setReportOpen(true)} onEnd={() => void endConversation()} />
+                <MediaStage profile={profile} partner={liveRoom.partner} mode={liveRoom.mode} media={media} chatDiagnostics={chatDiagnostics} chatOpen={mediaChatOpen} anotherVibeStatus={anotherVibeStatus} onToggleChat={() => setMediaChatOpen((value) => !value)} onAnotherVibe={() => void findAnotherVibe()} onReport={() => setReportOpen(true)} onEnd={() => void endConversation()} />
               </div>
               <aside className={cn("min-h-[320px] shrink-0 xl:flex xl:min-h-0 xl:w-[350px]", mediaChatOpen ? "flex" : "hidden")}>
                 <RoomChatPanel compact profile={profile} partner={liveRoom.partner} messages={messages} partnerTyping={partnerTyping} draft={draft} messagesEndRef={messagesEndRef} onDraftChange={setDraft} onSend={() => void sendDraft()} onTyping={announceTyping} />

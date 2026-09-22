@@ -57,11 +57,27 @@ export async function subscribeToRoom(
 
   const session = await ensureAnonymousAuth();
   if (!session.access_token || !session.user.id) throw new Error("The anonymous Supabase session is incomplete.");
-  console.info("[AUTH] session:", session.user.id);
+  const userId = session.user.id;
+  const category = purpose === "chat" ? "CHAT" : "SIGNAL";
+  if (process.env.NODE_ENV === "development") {
+    console.info(`[VC][room=${roomId}][user=${userId}][AUTH] session active: ${userId}`);
+  }
   await supabase.realtime.setAuth(session.access_token);
 
   const topic = purpose === "chat" ? `room:${roomId}:chat` : `room:${roomId}`;
-  console.info(`[${purpose === "chat" ? "CHAT" : "SIGNAL"}] subscribing:`, topic);
+  if (process.env.NODE_ENV === "development") {
+    console.info(`[VC][room=${roomId}][user=${userId}][${category}] channel subscribing: ${topic}`);
+  }
+
+  // Clean up any stale or errored channel for the same topic before subscribing
+  const existingChannel = supabase.getChannels().find((c) => c.topic === topic);
+  if (existingChannel) {
+    if (process.env.NODE_ENV === "development") {
+      console.info(`[VC][room=${roomId}][user=${userId}][${category}] removing existing channel for ${topic}`);
+    }
+    await supabase.removeChannel(existingChannel).catch(() => undefined);
+  }
+
   let channel = supabase.channel(topic, { config: { private: true, broadcast: { self: false, ack: true } } });
   if (purpose === "chat") {
     channel = channel.on(
@@ -69,6 +85,9 @@ export async function subscribeToRoom(
       { event: "INSERT", schema: "public", table: "messages", filter: `room_id=eq.${roomId}` },
       (payload) => {
         const row = payload.new as Record<string, string | null>;
+        if (process.env.NODE_ENV === "development") {
+          console.info(`[VC][room=${roomId}][user=${userId}][CHAT] Postgres Changes delivery: message ${row.id}`);
+        }
         handlers.onMessage?.({
           id: String(row.id),
           roomId: String(row.room_id),
@@ -80,12 +99,22 @@ export async function subscribeToRoom(
         });
       },
     ).on("broadcast", { event: "message-available" }, ({ payload }) => {
-      if (isChatMessageHint(payload, roomId)) handlers.onMessageHint?.(payload);
+      if (isChatMessageHint(payload, roomId)) {
+        if (process.env.NODE_ENV === "development") {
+          console.info(`[VC][room=${roomId}][user=${userId}][CHAT] Broadcast delivery hint: message ${payload.messageId}`);
+        }
+        handlers.onMessageHint?.(payload);
+      }
     })
       .on("broadcast", { event: "typing" }, ({ payload }) => handlers.onTyping?.(payload as { senderId: string; typing: boolean }));
   } else {
     channel = channel.on("broadcast", { event: "webrtc" }, ({ payload }) => {
-      if (isSignalPayload(payload, roomId)) handlers.onSignal?.(payload);
+      if (isSignalPayload(payload, roomId)) {
+        if (process.env.NODE_ENV === "development") {
+          console.info(`[VC][room=${roomId}][user=${userId}][SIGNAL] signal received: ${payload.kind}`);
+        }
+        handlers.onSignal?.(payload);
+      }
     });
   }
 
@@ -106,7 +135,9 @@ export async function subscribeToRoom(
       }, 10_000);
 
       channel.subscribe((status, subscriptionError) => {
-        console.info("[REALTIME] STATUS:", status, { topic });
+        if (process.env.NODE_ENV === "development") {
+          console.info(`[VC][room=${roomId}][user=${userId}][${category}] STATUS: ${status}`, { topic });
+        }
         if (subscriptionError) {
           console.error("[REALTIME] FULL ERROR:", subscriptionError);
           console.error("[REALTIME] ERROR NAME:", subscriptionError.name);
@@ -136,12 +167,18 @@ export async function sendTyping(channel: RealtimeChannel | null, senderId: stri
 export async function announceMessageAvailable(channel: RealtimeChannel | null, hint: ChatMessageHint) {
   if (!channel) return false;
   const status = await channel.send({ type: "broadcast", event: "message-available", payload: hint });
+  if (process.env.NODE_ENV === "development") {
+    console.info(`[VC][room=${hint.roomId}][user=${hint.senderId}][CHAT] Broadcast acknowledgement: message ${hint.messageId} -> ${status}`);
+  }
   return status === "ok";
 }
 
 export async function sendSignal(channel: RealtimeChannel | null, signal: SignalPayload) {
   if (!channel) throw new Error("The private signaling channel is not ready.");
   const status = await channel.send({ type: "broadcast", event: "webrtc", payload: signal });
+  if (process.env.NODE_ENV === "development") {
+    console.info(`[VC][room=${signal.roomId}][user=${signal.senderId}][SIGNAL] broadcast send: ${signal.kind} -> ${status}`);
+  }
   if (status !== "ok") throw new Error(`The signaling broadcast ${status}.`);
 }
 

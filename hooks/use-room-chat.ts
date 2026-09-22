@@ -5,9 +5,28 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { announceMessageAvailable, leaveRoomChannel, sendTyping, subscribeToRoom } from "@/services/realtime";
 import type { AnonymousProfile, ChatMessage } from "@/types";
 
+export type ChatDiagnostics = {
+  channelStatus: "IDLE" | "CONNECTING" | "SUBSCRIBED" | "TIMED_OUT" | "CLOSED" | "CHANNEL_ERROR";
+  lastPostStatus: "idle" | "success" | "failed";
+  lastBroadcastStatus: "idle" | "sent" | "failed";
+  lastVerificationStatus: "idle" | "success" | "failed";
+  postgresFallbackUsed: boolean;
+  messageCount: number;
+};
+
+const INITIAL_CHAT_DIAGNOSTICS: ChatDiagnostics = {
+  channelStatus: "IDLE",
+  lastPostStatus: "idle",
+  lastBroadcastStatus: "idle",
+  lastVerificationStatus: "idle",
+  postgresFallbackUsed: false,
+  messageCount: 0,
+};
+
 export function useRoomChat(roomId: string, profile: AnonymousProfile | null) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [partnerTyping, setPartnerTyping] = useState(false);
+  const [chatDiagnostics, setChatDiagnostics] = useState<ChatDiagnostics>(INITIAL_CHAT_DIAGNOSTICS);
   const channelRef = useRef<RealtimeChannel | null>(null);
   const channelPromiseRef = useRef<Promise<RealtimeChannel> | null>(null);
   const typingTimer = useRef<number | null>(null);
@@ -15,14 +34,29 @@ export function useRoomChat(roomId: string, profile: AnonymousProfile | null) {
   const seenMessageHintIdsRef = useRef(new Set<string>());
   const verifyingMessageIdsRef = useRef(new Set<string>());
 
+  const log = useCallback((message: string, data?: unknown) => {
+    if (process.env.NODE_ENV === "development") {
+      const prefix = `[VC][room=${roomId}][user=${profile?.id ?? "anon"}][CHAT]`;
+      if (data !== undefined) {
+        console.info(`${prefix} ${message}`, data);
+      } else {
+        console.info(`${prefix} ${message}`);
+      }
+    }
+  }, [profile?.id, roomId]);
+
   useEffect(() => {
     if (!profile) return;
-    queueMicrotask(() => setMessages([]));
+    queueMicrotask(() => {
+      setMessages([]);
+      setChatDiagnostics({ ...INITIAL_CHAT_DIAGNOSTICS, channelStatus: "CONNECTING" });
+    });
     knownMessageIdsRef.current.clear();
     seenMessageHintIdsRef.current.clear();
     verifyingMessageIdsRef.current.clear();
 
     let active = true;
+
     void fetch(`/api/messages?roomId=${encodeURIComponent(roomId)}`, { cache: "no-store" })
       .then(async (response) => {
         if (!response.ok) return;
@@ -32,19 +66,35 @@ export function useRoomChat(roomId: string, profile: AnonymousProfile | null) {
           setMessages((current) => {
             const merged = new Map(data.messages?.map((message) => [message.id, message]) ?? []);
             for (const message of current) merged.set(message.id, message);
-            return [...merged.values()].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+            const sorted = [...merged.values()].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+            setChatDiagnostics((diag) => ({ ...diag, messageCount: sorted.length }));
+            return sorted;
           });
         }
       })
       .catch(() => undefined);
+
     const subscription = subscribeToRoom(roomId, {
+      onStatus: (status) => {
+        if (active) {
+          setChatDiagnostics((current) => ({ ...current, channelStatus: status }));
+        }
+      },
       onMessage: (incoming) => {
         if (incoming.senderId === profile.id) return;
+        const wasKnown = knownMessageIdsRef.current.has(incoming.id);
         knownMessageIdsRef.current.add(incoming.id);
-        if (process.env.NODE_ENV === "development") {
-          console.info("[CHAT] Postgres delivery", { latencyMs: Math.max(0, Date.now() - Date.parse(incoming.createdAt)) });
-        }
-        setMessages((current) => current.some((item) => item.id === incoming.id) ? current : [...current, incoming]);
+        log("Postgres delivery", { latencyMs: Math.max(0, Date.now() - Date.parse(incoming.createdAt)) });
+        setMessages((current) => {
+          if (current.some((item) => item.id === incoming.id)) return current;
+          const next = [...current, incoming];
+          setChatDiagnostics((diag) => ({
+            ...diag,
+            postgresFallbackUsed: !wasKnown,
+            messageCount: next.length,
+          }));
+          return next;
+        });
       },
       onMessageHint: (hint) => {
         if (
@@ -52,7 +102,6 @@ export function useRoomChat(roomId: string, profile: AnonymousProfile | null) {
           || knownMessageIdsRef.current.has(hint.messageId)
           || seenMessageHintIdsRef.current.has(hint.messageId)
           || verifyingMessageIdsRef.current.has(hint.messageId)
-          || verifyingMessageIdsRef.current.size >= 4
         ) return;
         if (seenMessageHintIdsRef.current.size >= 512) seenMessageHintIdsRef.current.clear();
         seenMessageHintIdsRef.current.add(hint.messageId);
@@ -60,21 +109,32 @@ export function useRoomChat(roomId: string, profile: AnonymousProfile | null) {
         const verificationStarted = performance.now();
         void fetch(`/api/messages?roomId=${encodeURIComponent(roomId)}&messageId=${encodeURIComponent(hint.messageId)}`, { cache: "no-store" })
           .then(async (response) => {
-            if (!response.ok) return;
+            if (!response.ok) throw new Error(`Verification HTTP ${response.status}`);
             const data = await response.json() as { messages?: ChatMessage[] };
             const verified = data.messages?.[0];
             if (!active || !verified || verified.senderId !== hint.senderId) return;
             knownMessageIdsRef.current.add(verified.id);
-            setMessages((current) => current.some((item) => item.id === verified.id) ? current : [...current, verified]);
-            if (process.env.NODE_ENV === "development") {
-              console.info("[CHAT] broadcast hint verified", {
-                verificationMs: Math.round(performance.now() - verificationStarted),
-                approximateEndToEndMs: Math.max(0, Date.now() - hint.sentAt),
-              });
-            }
+            setMessages((current) => {
+              if (current.some((item) => item.id === verified.id)) return current;
+              const next = [...current, verified];
+              setChatDiagnostics((diag) => ({
+                ...diag,
+                lastVerificationStatus: "success",
+                messageCount: next.length,
+              }));
+              return next;
+            });
+            log("broadcast hint verified", {
+              verificationMs: Math.round(performance.now() - verificationStarted),
+              approximateEndToEndMs: Math.max(0, Date.now() - hint.sentAt),
+            });
           })
           .catch((verificationError) => {
-            if (process.env.NODE_ENV === "development") console.warn("[CHAT] message verification failed; Postgres delivery remains active", verificationError);
+            seenMessageHintIdsRef.current.delete(hint.messageId);
+            setChatDiagnostics((diag) => ({ ...diag, lastVerificationStatus: "failed" }));
+            if (process.env.NODE_ENV === "development") {
+              console.warn(`[VC][room=${roomId}][user=${profile.id}][CHAT] message verification failed; Postgres delivery remains active`, verificationError);
+            }
           })
           .finally(() => verifyingMessageIdsRef.current.delete(hint.messageId));
       },
@@ -85,10 +145,14 @@ export function useRoomChat(roomId: string, profile: AnonymousProfile | null) {
     channelPromiseRef.current = subscription;
     void subscription.then((channel) => {
       if (!active) void leaveRoomChannel(channel);
-      else channelRef.current = channel;
+      else {
+        channelRef.current = channel;
+        setChatDiagnostics((current) => ({ ...current, channelStatus: "SUBSCRIBED" }));
+      }
     }).catch(() => {
       channelRef.current = null;
       if (channelPromiseRef.current === subscription) channelPromiseRef.current = null;
+      setChatDiagnostics((current) => ({ ...current, channelStatus: "CHANNEL_ERROR" }));
     });
     return () => {
       active = false;
@@ -97,7 +161,7 @@ export function useRoomChat(roomId: string, profile: AnonymousProfile | null) {
       channelRef.current = null;
       if (channelPromiseRef.current === subscription) channelPromiseRef.current = null;
     };
-  }, [profile, roomId]);
+  }, [log, profile, roomId]);
 
   const sendMessage = useCallback(async (content: string) => {
     if (!profile || !content.trim()) return;
@@ -111,7 +175,11 @@ export function useRoomChat(roomId: string, profile: AnonymousProfile | null) {
       status: "sending",
     };
     knownMessageIdsRef.current.add(optimistic.id);
-    setMessages((current) => [...current, optimistic]);
+    setMessages((current) => {
+      const next = [...current, optimistic];
+      setChatDiagnostics((diag) => ({ ...diag, messageCount: next.length }));
+      return next;
+    });
     try {
       const requestStarted = performance.now();
       const response = await fetch("/api/messages", {
@@ -120,8 +188,11 @@ export function useRoomChat(roomId: string, profile: AnonymousProfile | null) {
         body: JSON.stringify({ roomId, content: optimistic.content, clientId: optimistic.id }),
       });
       const payload = await response.json().catch(() => null) as { messageId?: string; acceptedAt?: string } | null;
-      if (process.env.NODE_ENV === "development" && response.ok) {
-        console.info("[CHAT] message persisted", { apiMs: Math.round(performance.now() - requestStarted), roomScoped: true });
+      if (response.ok) {
+        log("message persisted", { apiMs: Math.round(performance.now() - requestStarted), roomScoped: true });
+        setChatDiagnostics((diag) => ({ ...diag, lastPostStatus: "success" }));
+      } else {
+        setChatDiagnostics((diag) => ({ ...diag, lastPostStatus: "failed" }));
       }
       setMessages((current) => current.map((message) => message.id === optimistic.id ? { ...message, status: response.ok ? "sent" : "failed" } : message));
       if (response.ok) {
@@ -135,15 +206,20 @@ export function useRoomChat(roomId: string, profile: AnonymousProfile | null) {
             senderId: profile.id,
             sentAt: Date.now(),
           });
-          if (process.env.NODE_ENV === "development") console.info("[CHAT] fast delivery hint", { announced, messageId });
+          setChatDiagnostics((diag) => ({ ...diag, lastBroadcastStatus: announced ? "sent" : "failed" }));
+          log("fast delivery hint", { announced, messageId });
         })().catch((announcementError) => {
-          if (process.env.NODE_ENV === "development") console.warn("[CHAT] fast delivery hint failed; Postgres delivery remains active", announcementError);
+          setChatDiagnostics((diag) => ({ ...diag, lastBroadcastStatus: "failed" }));
+          if (process.env.NODE_ENV === "development") {
+            console.warn(`[VC][room=${roomId}][user=${profile.id}][CHAT] fast delivery hint failed; Postgres delivery remains active`, announcementError);
+          }
         });
       }
     } catch {
+      setChatDiagnostics((diag) => ({ ...diag, lastPostStatus: "failed" }));
       setMessages((current) => current.map((message) => message.id === optimistic.id ? { ...message, status: "failed" } : message));
     }
-  }, [profile, roomId]);
+  }, [log, profile, roomId]);
 
   const announceTyping = useCallback(() => {
     if (!profile) return;
@@ -152,5 +228,5 @@ export function useRoomChat(roomId: string, profile: AnonymousProfile | null) {
     typingTimer.current = window.setTimeout(() => void sendTyping(channelRef.current, profile.id, false), 1200);
   }, [profile]);
 
-  return { messages, partnerTyping, sendMessage, announceTyping };
+  return { messages, partnerTyping, sendMessage, announceTyping, chatDiagnostics };
 }

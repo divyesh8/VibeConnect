@@ -15,6 +15,8 @@ export type PeerMilestone =
   | "first-decoded-video-frame";
 
 type PeerManagerOptions = {
+  roomId?: string;
+  userId?: string;
   iceServers: RTCIceServer[];
   forceRelay: boolean;
   emitSignal: (signal: PeerSignal) => Promise<void>;
@@ -38,10 +40,17 @@ type StatsSample = {
 
 const CANDIDATE_TYPES = ["host", "srflx", "prflx", "relay"] as const;
 
-function developmentLog(prefix: string, message: string, details?: unknown) {
+function formatLog(prefix: string, message: string, roomId?: string, userId?: string) {
+  const roomTag = roomId ? `[room=${roomId}]` : "";
+  const userTag = userId ? `[user=${userId}]` : "";
+  return `[VC]${roomTag}${userTag}[${prefix}] ${message}`;
+}
+
+function developmentLog(prefix: string, message: string, details?: unknown, roomId?: string, userId?: string) {
   if (process.env.NODE_ENV !== "development") return;
-  if (details === undefined) console.info(`[${prefix}] ${message}`);
-  else console.info(`[${prefix}] ${message}`, details);
+  const header = formatLog(prefix, message, roomId, userId);
+  if (details === undefined) console.info(header);
+  else console.info(header, details);
 }
 
 function descriptionInit(description: RTCSessionDescription | null): RTCSessionDescriptionInit {
@@ -166,7 +175,14 @@ export class PeerManager {
   private makingOffer = false;
   private closed = false;
 
-  constructor(private readonly options: PeerManagerOptions) {
+  private log(prefix: "WEBRTC" | "ICE" | "SIGNAL" | "MEDIA", message: string, details?: unknown) {
+    developmentLog(prefix, message, details, this.options.roomId, this.options.userId);
+  }
+
+  private readonly options: PeerManagerOptions;
+
+  constructor(options: PeerManagerOptions) {
+    this.options = options;
     this.connection = new RTCPeerConnection({
       iceServers: options.iceServers,
       iceCandidatePoolSize: 4,
@@ -175,7 +191,7 @@ export class PeerManager {
       rtcpMuxPolicy: "require",
     });
 
-    developmentLog("WEBRTC", `peer connection created (${options.forceRelay ? "relay-only" : "all candidates"})`);
+    this.log("WEBRTC", `peer connection created (${options.forceRelay ? "relay-only" : "all candidates"})`);
 
     this.connection.onicecandidate = (event) => {
       if (!event.candidate || this.closed) return;
@@ -186,24 +202,29 @@ export class PeerManager {
         this.localCandidates.push(candidate);
       }
       this.markMilestone("first-local-ice");
-      developmentLog("ICE", `local candidate generated (${event.candidate.type ?? "unknown"})`);
+      this.log("ICE", `local candidate generated (${event.candidate.type ?? "unknown"})`);
       void this.options.emitSignal({ kind: "ice-candidate", candidate })
         .catch((error) => this.options.onError("Could not send an ICE candidate.", error));
     };
     this.connection.onicecandidateerror = (event) => {
-      developmentLog("ICE", `candidate error ${event.errorCode}: ${event.errorText}`, { url: event.url });
+      this.log("ICE", `candidate error ${event.errorCode}: ${event.errorText}`, { url: event.url });
     };
     this.connection.ontrack = (event) => {
       if (this.closed) return;
       const negotiatedStream = event.streams[0];
       if (negotiatedStream) {
-        this.remoteStream = negotiatedStream;
-      } else if (!this.remoteStream.getTracks().some((track) => track.id === event.track.id)) {
+        for (const track of negotiatedStream.getTracks()) {
+          if (!this.remoteStream.getTracks().some((item) => item.id === track.id)) {
+            this.remoteStream.addTrack(track);
+          }
+        }
+      }
+      if (!this.remoteStream.getTracks().some((track) => track.id === event.track.id)) {
         this.remoteStream.addTrack(event.track);
       }
       this.markMilestone(event.track.kind === "video" ? "first-remote-video-track" : "first-remote-audio-track");
-      developmentLog("MEDIA", `remote ${event.track.kind} track received (${event.track.readyState})`);
-      developmentLog("MEDIA", "Remote tracks received:", this.remoteStream.getTracks().map((track) => ({
+      this.log("MEDIA", `remote ${event.track.kind} track received (${event.track.readyState})`);
+      this.log("MEDIA", "Remote tracks received:", this.remoteStream.getTracks().map((track) => ({
         kind: track.kind,
         enabled: track.enabled,
         muted: track.muted,
@@ -216,7 +237,7 @@ export class PeerManager {
       this.options.onStateChange();
     };
     this.connection.onconnectionstatechange = () => {
-      developmentLog("WEBRTC", `connectionState=${this.connection.connectionState}`);
+      this.log("WEBRTC", `connectionState=${this.connection.connectionState}`);
       if (this.connection.connectionState === "connected") {
         this.markMilestone("peer-connected");
         void this.configureVideoForRealtime();
@@ -224,18 +245,18 @@ export class PeerManager {
       this.options.onStateChange();
     };
     this.connection.oniceconnectionstatechange = () => {
-      developmentLog("ICE", `iceConnectionState=${this.connection.iceConnectionState}`);
+      this.log("ICE", `iceConnectionState=${this.connection.iceConnectionState}`);
       if (this.connection.iceConnectionState === "connected" || this.connection.iceConnectionState === "completed") {
         this.markMilestone("ice-connected");
       }
       this.options.onStateChange();
     };
     this.connection.onicegatheringstatechange = () => {
-      developmentLog("ICE", `iceGatheringState=${this.connection.iceGatheringState}`);
+      this.log("ICE", `iceGatheringState=${this.connection.iceGatheringState}`);
       this.options.onStateChange();
     };
     this.connection.onsignalingstatechange = () => {
-      developmentLog("SIGNAL", `signalingState=${this.connection.signalingState}`);
+      this.log("SIGNAL", `signalingState=${this.connection.signalingState}`);
       this.options.onStateChange();
     };
   }
@@ -251,9 +272,9 @@ export class PeerManager {
       try {
         track.contentHint = track.kind === "video" ? "motion" : "speech";
       } catch (error) {
-        developmentLog("MEDIA", `${track.kind} content hint is not supported`, error);
+        this.log("MEDIA", `${track.kind} content hint is not supported`, error);
       }
-      developmentLog("MEDIA", `local ${track.kind} track`, {
+      this.log("MEDIA", `local ${track.kind} track`, {
         enabled: track.enabled,
         muted: track.muted,
         readyState: track.readyState,
@@ -264,21 +285,27 @@ export class PeerManager {
     const senderKinds = this.connection.getSenders().map((sender) => sender.track?.kind ?? "missing");
     if (!senderKinds.includes("audio")) throw new Error("The microphone track was not added to the peer connection.");
     if (requireVideo && !senderKinds.includes("video")) throw new Error("The camera track was not added before offer creation.");
-    developmentLog("WEBRTC", "local senders ready before offer", senderKinds);
+    this.log("WEBRTC", "local senders ready before offer", senderKinds);
     await this.configureVideoForRealtime();
   }
 
   async createOffer(options: { iceRestart?: boolean } = {}) {
     if (this.closed || this.makingOffer || this.connection.signalingState !== "stable") return false;
+    const senders = this.connection.getSenders();
+    const hasAudio = senders.some((s) => s.track?.kind === "audio");
+    if (!hasAudio) {
+      this.log("WEBRTC", "cannot create offer: no live audio sender found");
+      return false;
+    }
     this.makingOffer = true;
     try {
       if (options.iceRestart) this.clearLocalCandidates();
-      developmentLog("SIGNAL", options.iceRestart ? "creating ICE-restart offer" : "creating offer");
+      this.log("SIGNAL", options.iceRestart ? "creating ICE-restart offer" : "creating offer");
       const offer = await this.connection.createOffer({ iceRestart: options.iceRestart });
-      developmentLog("SIGNAL", "OFFER CREATED", { type: offer.type, sdpLength: offer.sdp?.length ?? 0 });
+      this.log("SIGNAL", "OFFER CREATED", { type: offer.type, sdpLength: offer.sdp?.length ?? 0 });
       await this.connection.setLocalDescription(offer);
       await this.options.emitSignal({ kind: "offer", sdp: descriptionInit(this.connection.localDescription) });
-      developmentLog("SIGNAL", "OFFER SENT (trickle ICE continues independently)");
+      this.log("SIGNAL", "OFFER SENT (trickle ICE continues independently)");
       return true;
     } finally {
       this.makingOffer = false;
@@ -293,7 +320,19 @@ export class PeerManager {
       || this.connection.remoteDescription
     ) return false;
     await this.options.emitSignal({ kind: "offer", sdp: descriptionInit(this.connection.localDescription) });
-    developmentLog("SIGNAL", "pending offer re-sent after peer-ready heartbeat");
+    this.log("SIGNAL", "pending offer re-sent after peer-ready heartbeat");
+    return true;
+  }
+
+  async resendPendingAnswer() {
+    if (
+      this.closed
+      || this.connection.signalingState !== "stable"
+      || this.connection.localDescription?.type !== "answer"
+      || !this.connection.remoteDescription
+    ) return false;
+    await this.options.emitSignal({ kind: "answer", sdp: descriptionInit(this.connection.localDescription) });
+    this.log("SIGNAL", "pending answer re-sent after heartbeat");
     return true;
   }
 
@@ -305,24 +344,36 @@ export class PeerManager {
       && this.connection.localDescription?.type === "answer"
     ) {
       await this.options.emitSignal({ kind: "answer", sdp: descriptionInit(this.connection.localDescription) });
-      developmentLog("SIGNAL", "duplicate offer recovered by re-sending the existing answer");
+      this.log("SIGNAL", "duplicate offer recovered by re-sending the existing answer");
       return;
     }
     this.prepareForRemoteDescription(sdp);
-    developmentLog("SIGNAL", "OFFER RECEIVED", { type: sdp.type, sdpLength: sdp.sdp?.length ?? 0 });
+    this.log("SIGNAL", "OFFER RECEIVED", { type: sdp.type, sdpLength: sdp.sdp?.length ?? 0 });
     await this.connection.setRemoteDescription(sdp);
     await this.flushCandidates();
     const answer = await this.connection.createAnswer();
-    developmentLog("SIGNAL", "ANSWER CREATED", { type: answer.type, sdpLength: answer.sdp?.length ?? 0 });
+    this.log("SIGNAL", "ANSWER CREATED", { type: answer.type, sdpLength: answer.sdp?.length ?? 0 });
     await this.connection.setLocalDescription(answer);
     await this.options.emitSignal({ kind: "answer", sdp: descriptionInit(this.connection.localDescription) });
-    developmentLog("SIGNAL", "ANSWER SENT (trickle ICE continues independently)");
+    this.log("SIGNAL", "ANSWER SENT (trickle ICE continues independently)");
   }
 
   async acceptAnswer(sdp: RTCSessionDescriptionInit) {
-    if (this.closed || this.connection.signalingState === "stable") return;
+    if (this.closed) return;
+    if (
+      this.connection.signalingState === "stable"
+      && this.connection.remoteDescription?.type === "answer"
+      && this.connection.remoteDescription.sdp === sdp.sdp
+    ) {
+      this.log("SIGNAL", "duplicate answer safely ignored");
+      return;
+    }
+    if (this.connection.signalingState !== "have-local-offer") {
+      this.log("SIGNAL", `ignoring answer in signalingState=${this.connection.signalingState}`);
+      return;
+    }
     this.prepareForRemoteDescription(sdp);
-    developmentLog("SIGNAL", "ANSWER RECEIVED", { type: sdp.type, sdpLength: sdp.sdp?.length ?? 0 });
+    this.log("SIGNAL", "ANSWER RECEIVED", { type: sdp.type, sdpLength: sdp.sdp?.length ?? 0 });
     await this.connection.setRemoteDescription(sdp);
     await this.flushCandidates();
   }
@@ -334,12 +385,16 @@ export class PeerManager {
     if (!this.connection.remoteDescription) {
       this.candidateKeys.add(key);
       this.pendingCandidates.push(candidate);
-      developmentLog("ICE", "remote candidate queued until remoteDescription");
+      this.log("ICE", "remote candidate queued until remoteDescription");
       return;
     }
-    await this.connection.addIceCandidate(candidate);
-    this.candidateKeys.add(key);
-    developmentLog("ICE", "remote candidate added");
+    try {
+      await this.connection.addIceCandidate(candidate);
+      this.candidateKeys.add(key);
+      this.log("ICE", "remote candidate added");
+    } catch (error) {
+      this.log("ICE", "could not add remote candidate", error);
+    }
   }
 
   async resendLocalIceCandidates() {
@@ -347,7 +402,7 @@ export class PeerManager {
     for (const candidate of this.localCandidates) {
       await this.options.emitSignal({ kind: "ice-candidate", candidate });
     }
-    if (this.localCandidates.length) developmentLog("ICE", `${this.localCandidates.length} local candidates re-sent`);
+    if (this.localCandidates.length) this.log("ICE", `${this.localCandidates.length} local candidates re-sent`);
   }
 
   hasRelayCandidate() {
@@ -361,7 +416,7 @@ export class PeerManager {
       iceServers,
       iceTransportPolicy: forceRelay ? "relay" : "all",
     });
-    developmentLog("ICE", `ICE server configuration refreshed (${forceRelay ? "relay-only" : "all candidates"})`);
+    this.log("ICE", `ICE server configuration refreshed (${forceRelay ? "relay-only" : "all candidates"})`);
   }
 
   async restartIce() {
@@ -549,7 +604,7 @@ export class PeerManager {
     this.connection.onicegatheringstatechange = null;
     this.connection.onsignalingstatechange = null;
     this.connection.close();
-    developmentLog("WEBRTC", "peer connection closed");
+    this.log("WEBRTC", "peer connection closed");
   }
 
   private markMilestone(milestone: PeerMilestone) {
@@ -571,13 +626,13 @@ export class PeerManager {
       parameters.encodings[0].maxFramerate = 30;
       parameters.degradationPreference = "maintain-framerate";
       await sender.setParameters(parameters);
-      developmentLog("MEDIA", "video sender configured for realtime motion", {
+      this.log("MEDIA", "video sender configured for realtime motion", {
         maxBitrate: parameters.encodings[0].maxBitrate,
         maxFramerate: parameters.encodings[0].maxFramerate,
         degradationPreference: parameters.degradationPreference,
       });
     } catch (error) {
-      developmentLog("MEDIA", "browser kept its adaptive video sender defaults", error);
+      this.log("MEDIA", "browser kept its adaptive video sender defaults", error);
     }
   }
 
@@ -587,10 +642,10 @@ export class PeerManager {
     for (const candidate of queued) {
       try {
         await this.connection.addIceCandidate(candidate);
-        developmentLog("ICE", "queued remote candidate added");
+        this.log("ICE", "queued remote candidate added");
       } catch (error) {
         this.candidateKeys.delete(candidateKey(candidate));
-        throw error;
+        this.log("ICE", "could not add queued remote candidate", error);
       }
     }
   }
@@ -606,7 +661,7 @@ export class PeerManager {
       this.pendingCandidates = [];
       this.candidateKeys.clear();
       this.clearLocalCandidates();
-      developmentLog("ICE", "new remote ICE generation detected");
+      this.log("ICE", "new remote ICE generation detected");
     }
     if (nextUfrag) this.remoteIceUfrag = nextUfrag;
   }

@@ -134,6 +134,7 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
   const turnConfiguredRef = useRef(false);
   const restartAttemptsRef = useRef(0);
   const pendingBeforePeerRef = useRef<RTCIceCandidateInit[]>([]);
+  const pendingRemoteOfferRef = useRef<{ sdp: RTCSessionDescriptionInit } | null>(null);
   const seenNoncesRef = useRef(new Set<string>());
   const readyTimerRef = useRef<number | null>(null);
   const connectionTimerRef = useRef<number | null>(null);
@@ -147,6 +148,17 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
   const timelineOriginRef = useRef<number | null>(null);
   const timelineRef = useRef<WebRTCTimeline>({});
   const onPeerEndedRef = useRef(onPeerEnded);
+
+  const log = useCallback((tag: "WEBRTC" | "SIGNAL" | "MEDIA" | "ICE", message: string, data?: unknown) => {
+    if (process.env.NODE_ENV === "development") {
+      const prefix = `[VC][room=${roomId}][user=${userId}][${tag}]`;
+      if (data !== undefined) {
+        console.info(`${prefix} ${message}`, data);
+      } else {
+        console.info(`${prefix} ${message}`);
+      }
+    }
+  }, [roomId, userId]);
 
   useEffect(() => {
     phaseRef.current = phase;
@@ -174,15 +186,16 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
     const next = { ...timelineRef.current, [milestone]: elapsed };
     timelineRef.current = next;
     setTimeline(next);
-    if (process.env.NODE_ENV === "development") console.info(`[TIMING] ${milestone}: ${elapsed} ms`);
-  }, []);
+    log("WEBRTC", `[TIMING] ${milestone}: ${elapsed} ms`);
+  }, [log]);
 
   const send = useCallback(async (
     signal: PeerSignal | { kind: "peer-ready"; mediaReady: boolean } | { kind: "restart-request" } | { kind: "skip" | "call-ended" | "peer-disconnected" },
   ) => {
+    log("SIGNAL", `sending ${signal.kind}`);
     await sendSignal(channelRef.current, signalEnvelope(roomId, userId, signal));
     if (signal.kind === "peer-ready") {
-      console.info("[SIGNAL] peer-ready sent", { mediaReady: signal.mediaReady });
+      log("SIGNAL", "peer-ready sent", { mediaReady: signal.mediaReady });
       setSignalDiagnostics((current) => ({ ...current, peerReady: "sent" }));
     }
     if (signal.kind === "offer") {
@@ -194,7 +207,7 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
       setSignalDiagnostics((current) => ({ ...current, answer: "sent" }));
     }
     if (signal.kind === "ice-candidate") setSignalDiagnostics((current) => ({ ...current, localIce: current.localIce + 1 }));
-  }, [markTimeline, roomId, userId]);
+  }, [log, markTimeline, roomId, userId]);
 
   const refreshDiagnostics = useCallback(async () => {
     const peer = peerRef.current;
@@ -303,6 +316,8 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
   const createPeer = useCallback((iceServers: RTCIceServer[], forceRelay: boolean) => {
     if (peerRef.current) return peerRef.current;
     const peer = new PeerManager({
+      roomId,
+      userId,
       iceServers,
       forceRelay,
       emitSignal: send,
@@ -310,13 +325,13 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
       onStateChange: syncConnectionState,
       onMilestone: (milestone) => markTimeline(PEER_MILESTONES[milestone]),
       onError: (message, signalError) => {
-        console.error("[WEBRTC]", message, signalError);
+        console.error(`[VC][room=${roomId}][user=${userId}][WEBRTC]`, message, signalError);
         setError(message);
       },
     });
     peerRef.current = peer;
     return peer;
-  }, [markTimeline, send, syncConnectionState]);
+  }, [markTimeline, roomId, send, syncConnectionState, userId]);
 
   const maybeCreateOffer = useCallback(async () => {
     if (!initiator || !mediaReadyRef.current || !remoteReadyRef.current || offerStartedRef.current || !peerRef.current) return;
@@ -355,6 +370,7 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
     turnConfiguredRef.current = false;
     restartAttemptsRef.current = 0;
     pendingBeforePeerRef.current = [];
+    pendingRemoteOfferRef.current = null;
     seenNoncesRef.current.clear();
     signalQueueRef.current = Promise.resolve();
     if (leaveChannel) {
@@ -373,6 +389,7 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
       setTurnConfigured(null);
       setRealtimeStatus("IDLE");
       setSignalDiagnostics(EMPTY_SIGNAL_DIAGNOSTICS);
+      setPhase("idle");
     }
   }, [clearTimer]);
 
@@ -384,7 +401,7 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
 
     try {
       if (signal.kind === "peer-ready") {
-        console.info("[SIGNAL] peer-ready received", { mediaReady: signal.mediaReady });
+        log("SIGNAL", "peer-ready received", { mediaReady: signal.mediaReady });
         setSignalDiagnostics((current) => ({ ...current, peerReady: "received" }));
         if (signal.mediaReady) {
           remoteReadyRef.current = true;
@@ -406,7 +423,12 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
       if (signal.kind === "offer") {
         markTimeline("offerReceived");
         setSignalDiagnostics((current) => ({ ...current, offer: "received" }));
-        if (initiator || !peerRef.current || !mediaReadyRef.current) return;
+        if (initiator) return;
+        if (!peerRef.current || !mediaReadyRef.current) {
+          log("SIGNAL", "offer arrived before local media/peer ready; queuing offer");
+          pendingRemoteOfferRef.current = { sdp: signal.sdp };
+          return;
+        }
         setPhase("signaling");
         startConnectionTimeout();
         await peerRef.current.acceptOffer(signal.sdp);
@@ -440,7 +462,7 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
       setError("The secure signaling exchange failed. Please retry the call.");
       setPhase("failed");
     }
-  }, [cleanupConnection, initiator, markTimeline, maybeCreateOffer, refreshPeerIceConfiguration, roomId, startConnectionTimeout, userId]);
+  }, [cleanupConnection, initiator, log, markTimeline, maybeCreateOffer, refreshPeerIceConfiguration, roomId, startConnectionTimeout, userId]);
 
   const enqueueSignal = useCallback((signal: SignalPayload) => {
     const lifecycle = lifecycleRef.current;
@@ -580,7 +602,10 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
           fetchIceConfiguration(roomId),
         ]);
         if (lifecycle !== lifecycleRef.current) return;
-        if (!signalingChannel || !channelRef.current) throw new Error("The private signaling channel is not ready yet. Try again in a moment.");
+        if (!signalingChannel && !channelRef.current) throw new Error("The private signaling channel is not ready yet. Try again in a moment.");
+        if (!channelRef.current && signalingChannel) {
+          channelRef.current = signalingChannel;
+        }
         turnConfiguredRef.current = iceData.turnConfigured;
         setTurnConfigured(turnConfiguredRef.current);
 
@@ -588,7 +613,19 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
         if (!peer.connection.getSenders().some((sender) => sender.track)) await peer.addLocalStream(stream, mode === "video");
         for (const candidate of pendingBeforePeerRef.current) await peer.addRemoteIceCandidate(candidate);
         pendingBeforePeerRef.current = [];
-        setPhase(remoteReadyRef.current ? "signaling" : "waiting-for-peer");
+
+        if (!initiator && pendingRemoteOfferRef.current) {
+          const pending = pendingRemoteOfferRef.current;
+          pendingRemoteOfferRef.current = null;
+          log("WEBRTC", "processing pending remote offer after local media ready");
+          setPhase("signaling");
+          startConnectionTimeout();
+          await peer.acceptOffer(pending.sdp);
+          setPhase("ice-connecting");
+        } else {
+          setPhase(remoteReadyRef.current ? "signaling" : "waiting-for-peer");
+        }
+
         await send({ kind: "peer-ready", mediaReady: true });
         if (readyTimerRef.current) window.clearInterval(readyTimerRef.current);
         readyTimerRef.current = window.setInterval(() => {
@@ -596,7 +633,12 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
             void (async () => {
               await send({ kind: "peer-ready", mediaReady: true });
               await peerRef.current?.resendLocalIceCandidates();
-            })().catch((readyError) => console.warn("[SIGNAL] ready/candidate heartbeat failed", readyError));
+              if (!initiator) {
+                await peerRef.current?.resendPendingAnswer();
+              } else {
+                await peerRef.current?.resendPendingOffer();
+              }
+            })().catch((readyError) => log("SIGNAL", "ready/candidate heartbeat failed", readyError));
           }
         }, 1_500);
         if (DIAGNOSTICS_ENABLED) {
@@ -614,7 +656,7 @@ export function useWebRTC({ enabled, mode, roomId, userId, initiator, onPeerEnde
     } finally {
       if (mediaStartTokenRef.current === mediaStartToken) mediaStartTokenRef.current = null;
     }
-  }, [createPeer, enabled, markTimeline, maybeCreateOffer, mode, refreshDiagnostics, roomId, send]);
+  }, [createPeer, enabled, initiator, log, markTimeline, maybeCreateOffer, mode, refreshDiagnostics, roomId, send, startConnectionTimeout]);
 
   const toggleMic = useCallback(() => {
     setMicEnabled((currentlyEnabled) => {
